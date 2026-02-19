@@ -33,6 +33,7 @@ class ConfigEditor:
                 'market_context': getattr(config, 'MARKET_CONTEXT', {}),
                 'colors': getattr(config, 'COLORS', {}),
                 'observation_thresholds': getattr(config, 'OBSERVATION_THRESHOLDS', {}),
+                'use_custom_thresholds': getattr(config, 'USE_CUSTOM_THRESHOLDS', True),
             }
             
             return config_data
@@ -112,6 +113,7 @@ COLORS = {colors}
 
 OBSERVATION_THRESHOLDS = {observation_thresholds}
 
+USE_CUSTOM_THRESHOLDS = {use_custom_thresholds}  # Set to False to disable observation flags
 # ============================================================
 # FILE PATHS (Do not edit through UI)
 # ============================================================
@@ -128,7 +130,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
             category_benchmarks=json.dumps(config_data.get('category_benchmarks', {}), indent=4),
             market_context=json.dumps(config_data.get('market_context', {}), indent=4),
             colors=json.dumps(config_data.get('colors', {}), indent=4),
-            observation_thresholds=json.dumps(config_data.get('observation_thresholds', {}), indent=4)
+            observation_thresholds=json.dumps(config_data.get('observation_thresholds', {}), indent=4),
+            use_custom_thresholds=str(config_data.get('USE_CUSTOM_THRESHOLDS', True))
         )
         
         return content
@@ -210,48 +213,55 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
         """Edit model allocation settings"""
         st.subheader("Default Model Allocation")
         
-        default_model = self.config_data.get('default_model_allocation', {})
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            equity = st.number_input(
-                "Equity (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=float(default_model.get('Equity', 65.0)),
-                step=0.5
-            )
-        
-        with col2:
-            hybrid = st.number_input(
-                "Balance (Hybrid) (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=float(default_model.get('Balance (Hybrid)', 20.0)),
-                step=0.5
-            )
-        
-        with col3:
-            debt = st.number_input(
-                "Debt (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=float(default_model.get('Debt', 15.0)),
-                step=0.5
-            )
-        
-        total = equity + hybrid + debt
-        if abs(total - 100) > 0.01:
-            st.error(f"⚠️ Total must equal 100%. Current: {total}%")
+        use_customer_thresholds = st.checkbox("Use Customer's existing allocation values", value=True)
+
+        if use_customer_thresholds:
+            st.info("Customer's existing allocation values will be used as defaults")
         else:
-            st.success(f"✅ Total: {total}%")
-        
-        self.config_data['default_model_allocation'] = {
-            'Equity': equity,
-            'Balance (Hybrid)': hybrid,
-            'Debt': debt
-        }
+            default_model = self.config_data.get('default_model_allocation', {})
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                equity = st.number_input(
+                    "Equity (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(default_model.get('Equity', 65.0)),
+                    step=0.5
+                )
+            
+            with col2:
+                hybrid = st.number_input(
+                    "Balance (Hybrid) (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(default_model.get('Balance (Hybrid)', 20.0)),
+                    step=0.5
+                )
+            
+            with col3:
+                debt = st.number_input(
+                    "Debt (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=float(default_model.get('Debt', 15.0)),
+                    step=0.5
+                )
+            
+            total = equity + hybrid + debt
+            if abs(total - 100) > 0.01:
+                st.error(f"⚠️ Total must equal 100%. Current: {total}%")
+            else:
+                st.success(f"✅ Total: {total}%")
+            
+            self.config_data['default_model_allocation'] = {
+                'Equity': equity,
+                'Balance (Hybrid)': hybrid,
+                'Debt': debt
+            }
+
+        self.config_data['USE_CUSTOM_THRESHOLDS'] = use_customer_thresholds
         
         # Risk profile allocations
         st.markdown("---")

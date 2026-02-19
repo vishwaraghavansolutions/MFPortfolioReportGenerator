@@ -290,7 +290,7 @@ class PortfolioPDFGenerator:
                 bench = fund.get('benchmark', 0)
                 diff = xirr - bench
                 equity_data.append([
-                    fund['name'],
+                    fund['name'][:45],  # Truncate long names
                     f"{xirr:.2f}%",
                     f"{bench:.2f}%",
                     f"{diff:+.2f}%"
@@ -309,7 +309,7 @@ class PortfolioPDFGenerator:
             # Hybrid table
             hybrid_data = [['Fund Name', 'XIRR %']]
             for fund in portfolio_data['hybrid_funds']:
-                hybrid_data.append([fund['name'], f"{fund['xirr']:.2f}%"])
+                hybrid_data.append([fund['name'][:55], f"{fund['xirr']:.2f}%"])
             hybrid_table = self._create_table(hybrid_data, [4.5*inch, 1.5*inch])
             story.append(hybrid_table)
             story.append(PageBreak())

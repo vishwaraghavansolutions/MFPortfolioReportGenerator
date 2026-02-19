@@ -6,9 +6,11 @@ Loads mutual fund data from CSV and generates portfolio reports
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from pages.config_editor import ConfigEditor
 from pdf_generator import PortfolioPDFGenerator
 from utils.pdf_utils import format_currency_indian
 import re
+import utils.navbar as navbar
 
 scheme_df = pd.read_csv('data/SchemeData2301262313SS.csv')
 scheme_df.columns = scheme_df.columns.str.strip()
@@ -125,7 +127,7 @@ def calculate_portfolio_metrics(customer_df):
 
 def main():
     st.title("📊 Portfolio Analysis & PDF Generator")
-    
+    navbar.navbar()
     # File uploader
     st.sidebar.header("📁 Data Source")
     #csv_file = st.sidebar.file_uploader("Upload Mutual Fund CSV", type=['csv'])
@@ -207,10 +209,18 @@ def main():
             st.dataframe(alloc_df, use_container_width=True)
         
         with col2:
-            st.write("**Model Allocation (Editable)**")
-            model_equity = st.number_input("Model Equity %", 0.0, 100.0, 65.0, key="model_eq")
-            model_hybrid = st.number_input("Model Hybrid %", 0.0, 100.0, 20.0, key="model_hy")
-            model_debt = st.number_input("Model Debt %", 0.0, 100.0, 15.0, key="model_dt")
+            editor = ConfigEditor()
+
+            st.write(f"Use user values: {editor.config_data['use_custom_thresholds']}")
+            if editor.config_data['use_custom_thresholds']:
+                model_debt = metrics['allocation']['Debt']
+                model_equity = metrics['allocation']['Equity']
+                model_hybrid = metrics['allocation']['Hybrid']
+            else:
+                st.write("**Model Allocation (Editable)**")
+                model_equity = st.number_input("Model Equity %", 0.0, 100.0, editor.config_data['default_model_allocation']['Equity'], key="model_eq")
+                model_hybrid = st.number_input("Model Hybrid %", 0.0, 100.0, editor.config_data['default_model_allocation']['Balance (Hybrid)'], key="model_hy")
+                model_debt = st.number_input("Model Debt %", 0.0, 100.0, editor.config_data['default_model_allocation']['Debt'], key="model_dt")
     
     with tab3:
         st.subheader("Fund Performance")
