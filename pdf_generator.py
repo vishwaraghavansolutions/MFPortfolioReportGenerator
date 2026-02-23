@@ -197,6 +197,7 @@ class PortfolioPDFGenerator:
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 11),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
@@ -276,28 +277,90 @@ class PortfolioPDFGenerator:
             story.append(alloc_table)
             story.append(PageBreak())
         
-        # Equity Funds
-        if portfolio_data.get('equity_funds'):
-            story.append(Paragraph("Equity Fund Performance", self.styles['SectionHeader']))
-            chart = self._create_chart_equity_performance(portfolio_data['equity_funds'])
-            story.append(Image(chart, width=6.5*inch, height=4.5*inch))
-            story.append(Spacer(1, 0.3*inch))
-            
-            # Equity table
-            equity_data = [['Fund Name', 'XIRR %', 'Benchmark %', 'Difference']]
-            for fund in portfolio_data['equity_funds']:
-                xirr = fund['xirr']
-                bench = fund.get('benchmark', 0)
-                diff = xirr - bench
-                equity_data.append([
-                    fund['name'][:45],  # Truncate long names
-                    f"{xirr:.2f}%",
-                    f"{bench:.2f}%",
-                    f"{diff:+.2f}%"
-                ])
-            equity_table = self._create_table(equity_data, [3*inch, 1.2*inch, 1.2*inch, 1.1*inch])
-            story.append(equity_table)
-            story.append(Spacer(1, 0.4*inch))
+        # Equity Fundsif portfolio_data.get('equity_funds'):
+        story.append(Paragraph("Equity Fund Performance", self.styles['SectionHeader']))
+        chart = self._create_chart_equity_performance(portfolio_data['equity_funds'])
+        story.append(Image(chart, width=6.5*inch, height=4.5*inch))
+        story.append(Spacer(1, 0.3*inch))
+
+        # ── Styles for wrapping text inside table cells ───────────────────
+        fund_name_style = ParagraphStyle(
+            "FundName",
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=10,
+            wordWrap="LTR",
+        )
+        index_name_style = ParagraphStyle(
+            "IndexName",
+            fontName="Helvetica",
+            fontSize=7,
+            leading=10,
+            textColor=colors.HexColor("#4a4a4a"),
+            wordWrap="LTR",
+        )
+        header_style = ParagraphStyle(
+            "TableHeader",
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10,
+            textColor=colors.white,
+        )
+        diff_pos_style = ParagraphStyle(
+            "DiffPos",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            leading=10,
+            textColor=colors.HexColor("#1a7a1a"),
+        )
+        diff_neg_style = ParagraphStyle(
+            "DiffNeg",
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            leading=10,
+            textColor=colors.HexColor("#cc0000"),
+        )
+
+        # ── Headers ───────────────────────────────────────────────────────
+        equity_data = [[
+            Paragraph("Fund Name",       header_style),
+            Paragraph("Benchmark Index", header_style),
+            Paragraph("XIRR %",          header_style),
+            Paragraph("3M %",            header_style),
+            Paragraph("1Y %",            header_style),
+            Paragraph("Difference",      header_style),
+        ]]
+
+        # ── Rows ──────────────────────────────────────────────────────────
+        for fund in portfolio_data['equity_funds']:
+            xirr        = fund.get('xirr', 0) or 0
+            bench_1yr   = fund.get('benchmark_return_1yr', None)
+            bench_3m    = fund.get('benchmark_return_3m',  None)
+            index_name  = fund.get('benchmark_index', '—')
+            bench       = bench_1yr or fund.get('benchmark', 0) or 0
+            diff        = xirr - bench
+
+            bench_3m_str  = f"{bench_3m:.2f}%"  if bench_3m  is not None else "—"
+            bench_1yr_str = f"{bench_1yr:.2f}%" if bench_1yr is not None else "—"
+            diff_str      = f"{diff:+.2f}%"
+            diff_style    = diff_pos_style if diff >= 0 else diff_neg_style
+
+            equity_data.append([
+                Paragraph(fund['name'],  fund_name_style),
+                Paragraph(index_name,    index_name_style),
+                f"{xirr:.2f}%",
+                bench_3m_str,
+                bench_1yr_str,
+                Paragraph(diff_str,      diff_style),
+            ])
+
+        # col widths: Fund Name | Index | XIRR | 3M | 1Y | Diff
+        equity_table = self._create_table(
+            equity_data,
+            [2.2*inch, 1.6*inch, 0.75*inch, 0.75*inch, 0.75*inch, 0.75*inch]
+        )
+        story.append(equity_table)
+        story.append(Spacer(1, 0.4*inch))
         
         # Hybrid Funds
         if portfolio_data.get('hybrid_funds'):

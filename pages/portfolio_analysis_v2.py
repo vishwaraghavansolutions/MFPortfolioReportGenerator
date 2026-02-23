@@ -11,6 +11,8 @@ from pdf_generator import PortfolioPDFGenerator
 from utils.pdf_utils import format_currency_indian
 import re
 import utils.navbar as navbar
+from utils.Indices_lookup import SchemeLookup
+from utils.customer_portfolio import get_customer_portfolio
 
 scheme_df = pd.read_csv('data/SchemeData2301262313SS.csv')
 scheme_df.columns = scheme_df.columns.str.strip()
@@ -62,13 +64,6 @@ def load_mutual_fund_data(csv_path):
     df = pd.read_csv(csv_path)
     return df
 
-
-def get_customer_portfolio(df, customer_name):
-    """Get portfolio data for a specific customer"""
-    customer_df = df[df['c_name'] == customer_name].copy()
-    return customer_df
-
-
 def calculate_portfolio_metrics(customer_df):
     """Calculate portfolio metrics from customer data"""
     
@@ -91,7 +86,13 @@ def calculate_portfolio_metrics(customer_df):
         equity_funds.append({
             'name': row['s_name'],
             'xirr': row['FolioXIRR'],
-            'benchmark': row['NatureXIRR']
+            'benchmark': row['NatureXIRR'],
+            'benchmark_index': row.get('benchmark_index', 0),
+            'benchmark_return_1m': row.get('benchmark_return_1m', 0),
+            'benchmark_return_3m': row.get('benchmark_return_3m', 0),
+            'benchmark_return_1yr': row.get('benchmark_return_1yr', 0),
+            'benchmark_return_3yr': row.get('benchmark_return_3yr', 0),
+            'benchmark_return_5yr': row.get('benchmark_return_5yr', 0)
         })
     
     hybrid_funds = []
@@ -165,7 +166,8 @@ def main():
         return
     
     # Get customer portfolio
-    customer_df = get_customer_portfolio(df, selected_customer)
+    lookup = SchemeLookup()
+    customer_df = get_customer_portfolio(df, selected_customer, lookup=lookup)
     metrics = calculate_portfolio_metrics(customer_df)
     
     # Display portfolio summary
@@ -228,7 +230,8 @@ def main():
         if metrics['equity_funds']:
             st.write("**Equity Funds**")
             equity_perf = pd.DataFrame(metrics['equity_funds'])
-            equity_perf.columns = ['Fund Name', 'XIRR %', 'Category XIRR %']
+            st.write(equity_perf.head(5))
+            equity_perf.columns = ['Fund Name', 'XIRR %', 'Category XIRR %', 'Benchmark Index', '1M Return %', '3M Return %', '1Y Return %', '3Y Return %', '5Y Return %'  ]
             st.dataframe(equity_perf, use_container_width=True)
         
         if metrics['hybrid_funds']:

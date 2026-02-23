@@ -1,0 +1,148 @@
+{
+  "Close Ended::Balanced": [
+    "Nifty 50"
+  ],
+  "Close Ended::ELSS": [
+    "Nifty 500",
+    "Nifty LargeMidcap 250"
+  ],
+  "Close Ended::Growth": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Balanced": [
+    "Nifty 50"
+  ],
+  "Open Ended::Debt Scheme - Banking and PSU Fund": [
+    "Nifty Bank",
+    "Nifty PSU Bank"
+  ],
+  "Open Ended::ELSS": [
+    "Nifty 500",
+    "Nifty LargeMidcap 250"
+  ],
+  "Open Ended::Equity Scheme - Contra Fund": [
+    "Nifty200 Value 30",
+    "Nifty500 Value 50"
+  ],
+  "Open Ended::Equity Scheme - Dividend Yield Fund": [
+    "Nifty Dividend Opportunities 50"
+  ],
+  "Open Ended::Equity Scheme - ELSS": [
+    "Nifty 500",
+    "Nifty LargeMidcap 250"
+  ],
+  "Open Ended::Equity Scheme - Flexi Cap Fund": [
+    "Nifty 500",
+    "Nifty Total Market",
+    "Nifty500 Flexicap Quality 30"
+  ],
+  "Open Ended::Equity Scheme - Focused Fund": [
+    "Nifty 50",
+    "Nifty 100",
+    "Nifty500 Quality 50"
+  ],
+  "Open Ended::Equity Scheme - Large & Mid Cap Fund": [
+    "Nifty LargeMidcap 250",
+    "Nifty 100"
+  ],
+  "Open Ended::Equity Scheme - Large Cap Fund": [
+    "Nifty 50",
+    "Nifty 100",
+    "Nifty100 Equal Weight"
+  ],
+  "Open Ended::Equity Scheme - Mid Cap Fund": [
+    "Nifty Midcap 50",
+    "Nifty Midcap 100",
+    "Nifty Midcap 150",
+    "Nifty Midcap Select"
+  ],
+  "Open Ended::Equity Scheme - Multi Cap Fund": [
+    "Nifty 500",
+    "Nifty500 Multicap 50:25:25",
+    "Nifty500 LargeMidSmall Equal-Cap Weighted"
+  ],
+  "Open Ended::Equity Scheme - Sectoral/ Thematic": [
+    "Nifty Auto",
+    "Nifty Bank",
+    "Nifty IT",
+    "Nifty Pharma",
+    "Nifty FMCG",
+    "Nifty Financial Services",
+    "Nifty Realty",
+    "Nifty Infrastructure",
+    "Nifty India Defence",
+    "Nifty Metal",
+    "Nifty PSU Bank",
+    "Nifty India Manufacturing"
+  ],
+  "Open Ended::Equity Scheme - Small Cap Fund": [
+    "Nifty Smallcap 50",
+    "Nifty Smallcap 100",
+    "Nifty Smallcap 250"
+  ],
+  "Open Ended::Equity Scheme - Value Fund": [
+    "Nifty200 Value 30",
+    "Nifty500 Value 50",
+    "Nifty50 Value 20"
+  ],
+  "Open Ended::Growth": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Hybrid Scheme - Aggressive Hybrid Fund": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Hybrid Scheme - Arbitrage Fund": [
+    "Nifty 50"
+  ],
+  "Open Ended::Hybrid Scheme - Balanced Hybrid Fund": [
+    "Nifty 50",
+    "Nifty 100"
+  ],
+  "Open Ended::Hybrid Scheme - Conservative Hybrid Fund": [
+    "Nifty 50"
+  ],
+  "Open Ended::Hybrid Scheme - Dynamic Asset Allocation or Balanced Advantage": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Hybrid Scheme - Equity Savings": [
+    "Nifty 50",
+    "Nifty 100"
+  ],
+  "Open Ended::Hybrid Scheme - Multi Asset Allocation": [
+    "Nifty 50",
+    "Nifty Commodities",
+    "Nifty REITs & InvITs"
+  ],
+  "Open Ended::Other Scheme - FoF Domestic": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Other Scheme - Index Funds": [
+    "Nifty 50",
+    "Nifty Next 50",
+    "Nifty 100",
+    "Nifty Midcap 150",
+    "Nifty Smallcap 250",
+    "Nifty 500"
+  ],
+  "Open Ended::Other Scheme - Other  ETFs": [
+    "Nifty 50",
+    "Nifty Bank",
+    "Nifty IT",
+    "Nifty Pharma",
+    "Nifty Auto",
+    "Nifty Metal"
+  ],
+  "Open Ended::Solution Oriented Scheme - Children s Fund": [
+    "Nifty 50",
+    "Nifty 500"
+  ],
+  "Open Ended::Solution Oriented Scheme - Retirement Fund": [
+    "Nifty 50",
+    "Nifty 500"
+  ]
+}
