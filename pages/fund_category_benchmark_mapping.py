@@ -378,20 +378,22 @@ def get_suggestion_status(key, mapping):
 
 with st.sidebar:
     st.markdown("### 📂 Scheme Data")
-    scheme_upload = st.file_uploader(
-        "Upload SchemeData CSV", type=["csv","xlsx","xls"],
-        label_visibility="collapsed",
-    )
+    #scheme_upload = st.file_uploader(
+    #    "Upload SchemeData CSV", type=["csv","xlsx","xls"],
+    #    label_visibility="collapsed",
+    #)
 
     # Determine scheme file source
+    SCHEME_FILE = Path("data/SchemeData2301262313SS.csv")
+
     scheme_path = None
-    if scheme_upload:
-        tmp = Path("data") / scheme_upload.name
-        with open(tmp, "wb") as f:
-            f.write(scheme_upload.read())
-        scheme_path = str(tmp)
-    elif SCHEME_FILE.exists():
+
+    if SCHEME_FILE.exists():
         scheme_path = str(SCHEME_FILE)
+        st.success(f"Using scheme file: {SCHEME_FILE.name}")
+    else:
+        st.error("SchemeData2301262313SS.csv not found in data folder.")
+
 
     st.markdown("---")
     st.markdown("### 🗂️ Index Parquet Files")
@@ -748,7 +750,7 @@ with tab_view:
 
         st.dataframe(
             sv_filt.style
-            .applymap(hl, subset=["Status"])
+            .map(hl, subset=["Status"])
             .set_properties(**{"font-family":"JetBrains Mono, monospace","font-size":"0.76rem"}),
             use_container_width=True, hide_index=True,
         )

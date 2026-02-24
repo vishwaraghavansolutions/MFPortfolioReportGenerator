@@ -14,7 +14,8 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-GUI backend
 import io
 from datetime import datetime
-
+import pandas as pd
+import re
 
 class PortfolioPDFGenerator:
     """Generate portfolio reports with charts and tables"""
@@ -186,6 +187,125 @@ class PortfolioPDFGenerator:
         
         return img_buffer
     
+    def _create_winrich_rank_table(self, equity_funds: list, winrich_csv: str) -> Table:
+        """
+        Match equity_funds by fund name against the Winrich rank CSV
+        and return a formatted ReportLab table.
+
+        Parameters
+        ----------
+        equity_funds : list of dicts with key 'name'
+        winrich_csv  : path to the CSV file with columns 'Fund Name', 'Winrichrank'
+        """
+        # ── Load Winrich CSV ──────────────────────────────────────────────────────
+        df = pd.read_csv(winrich_csv, sep=',', engine='python')   # handles tab or comma
+        df.columns = df.columns.str.strip()
+        print(df.columns)
+        df['Fund Name']    = df['Fund Name'].str.strip()
+        df['Winrichrank']  = pd.to_numeric(df['Winrichrank'], errors='coerce')
+        max_rank = int(df['Winrichrank'].max())   # ← used in every rank cell
+
+        # ── Styles ────────────────────────────────────────────────────────────────
+        header_style = ParagraphStyle(
+            "WRHeader",
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10,
+            textColor=colors.white,
+        )
+        fund_name_style = ParagraphStyle(
+            "WRFundName",
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=10,
+            wordWrap="LTR",
+        )
+        rank_style = ParagraphStyle(
+            "WRRank",
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10,
+            alignment=1,   # centre
+        )
+        no_rank_style = ParagraphStyle(
+            "WRNoRank",
+            fontName="Helvetica-Oblique",
+            fontSize=7.5,
+            leading=10,
+            textColor=colors.HexColor("#999999"),
+            alignment=1,
+        )
+
+        # ── Rank badge colour by position ─────────────────────────────────────────
+        def _rank_colour(rank):
+            if pd.isna(rank):
+                return colors.HexColor("#999999")
+            if rank <= 3:
+                return colors.HexColor("#1a7a1a")   # top 3  — green
+            if rank <= 10:
+                return colors.HexColor("#1a5276")   # top 10 — blue
+            return colors.HexColor("#7d3c98")       # rest   — purple
+
+        # ── Fuzzy match: strip suffix in parens, lowercase, check containment ─────
+        def _match_rank(fund_name: str) -> int | None:
+            clean = fund_name.split("-")[0].strip().lower()
+            # Remove trailing " (G)", " (D)", " - Growth" etc.
+            clean = re.sub(r"\s*\(.*?\)\s*$", "", clean).strip()
+
+            best_rank = None
+            for _, row in df.iterrows():
+                csv_name = re.sub(r"\s*\(.*?\)\s*$", "", str(row["Fund Name"]).lower()).strip()
+                csv_name = csv_name.split("-")[0].strip()
+                # Match if one name contains the other
+                if clean in csv_name or csv_name in clean:
+                    best_rank = int(row["Winrichrank"]) if not pd.isna(row["Winrichrank"]) else None
+                    break
+            return best_rank
+
+        # ── Build table rows ──────────────────────────────────────────────────────
+        table_data = [[
+            Paragraph("Fund Name",    header_style),
+            Paragraph("Winrich Rank", header_style),
+        ]]
+
+        for fund in equity_funds:
+            rank = _match_rank(fund['name'])
+
+            if rank is not None:
+                rank_para = Paragraph(
+                f"<font color='{_rank_colour(rank)}'>#{rank} of {max_rank}</font>",
+                rank_style,
+            )
+            else:
+                rank_para = Paragraph("—", no_rank_style)
+
+            table_data.append([
+                Paragraph(fund['name'], fund_name_style),
+                rank_para,
+            ])
+
+        # ── Build table ───────────────────────────────────────────────────────────
+        table = Table(table_data, colWidths=[4.5*inch, 1.3*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND',    (0, 0), (-1, 0),  colors.HexColor('#2c3e50')),
+            ('TEXTCOLOR',     (0, 0), (-1, 0),  colors.white),
+            ('GRID',          (0, 0), (-1, -1), 0.5, colors.HexColor('#dee2e6')),
+            ('FONTSIZE',      (0, 0), (-1, -1), 8),
+            ('VALIGN',        (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN',         (1, 0), (1, -1),  'CENTER'),
+            ('TOPPADDING',    (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 6),
+        ]))
+
+        # Alternating row backgrounds
+        for i in range(1, len(table_data)):
+            bg = colors.white if i % 2 == 1 else colors.HexColor('#f8f9fa')
+            table.setStyle(TableStyle([('BACKGROUND', (0, i), (-1, i), bg)]))
+
+        return table
+
     def _create_table(self, data, col_widths=None):
         """Create a styled table"""
         if not col_widths:
@@ -362,6 +482,14 @@ class PortfolioPDFGenerator:
         story.append(equity_table)
         story.append(Spacer(1, 0.4*inch))
         
+        if portfolio_data.get('equity_funds'):
+            story.append(Paragraph("Winrich Fund Rankings", self.styles['SectionHeader']))
+            winrich_table = self._create_winrich_rank_table(
+                portfolio_data['equity_funds'],
+                winrich_csv="data/rankings/winrich_ranks.csv"   # path to your CSV
+            )
+            story.append(winrich_table)
+            story.append(Spacer(1, 0.4*inch))
         # Hybrid Funds
         if portfolio_data.get('hybrid_funds'):
             story.append(Paragraph("Hybrid Fund Performance", self.styles['SectionHeader']))
