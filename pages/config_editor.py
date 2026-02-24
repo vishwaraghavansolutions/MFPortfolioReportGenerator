@@ -91,16 +91,6 @@ DEFAULT_MODEL_ALLOCATION = {default_model_allocation}
 MODEL_ALLOCATIONS = {model_allocations}
 
 # ============================================================
-# BENCHMARK DATA
-# ============================================================
-
-# Category benchmark mappings
-CATEGORY_BENCHMARKS = {category_benchmarks}
-
-# Market context data
-MARKET_CONTEXT = {market_context}
-
-# ============================================================
 # VISUALIZATION SETTINGS
 # ============================================================
 
@@ -127,8 +117,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
             company_name=config_data.get('company_name', ''),
             default_model_allocation=json.dumps(config_data.get('default_model_allocation', {}), indent=4),
             model_allocations=json.dumps(config_data.get('model_allocations', {}), indent=4),
-            category_benchmarks=json.dumps(config_data.get('category_benchmarks', {}), indent=4),
-            market_context=json.dumps(config_data.get('market_context', {}), indent=4),
             colors=json.dumps(config_data.get('colors', {}), indent=4),
             observation_thresholds=json.dumps(config_data.get('observation_thresholds', {}), indent=4),
             use_custom_thresholds=str(config_data.get('USE_CUSTOM_THRESHOLDS', True))
@@ -148,8 +136,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
         tabs = st.tabs([
             "🏢 Company Settings",
             "📊 Model Allocations", 
-            "📈 Benchmarks",
-            "🌍 Market Context",
             "🎨 Visualization",
             "🔔 Thresholds"
         ])
@@ -161,21 +147,13 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
         # Tab 2: Model Allocations
         with tabs[1]:
             self._edit_model_allocations()
-        
-        # Tab 3: Benchmarks
+               
+        # Tab 3: Visualization
         with tabs[2]:
-            self._edit_benchmarks()
-        
-        # Tab 4: Market Context
-        with tabs[3]:
-            self._edit_market_context()
-        
-        # Tab 5: Visualization
-        with tabs[4]:
             self._edit_visualization()
         
-        # Tab 6: Thresholds
-        with tabs[5]:
+        # Tab 3: Thresholds
+        with tabs[3]:
             self._edit_thresholds()
         
         # Save button
@@ -290,76 +268,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
                 model_allocations[profile] = {'Equity': e, 'Balance (Hybrid)': h, 'Debt': d}
         
         self.config_data['model_allocations'] = model_allocations
-    
-    def _edit_benchmarks(self):
-        """Edit benchmark settings"""
-        st.subheader("Category Benchmarks")
         
-        benchmarks = self.config_data.get('category_benchmarks', {})
-        
-        categories = ["Large Cap", "Mid Cap", "Small Cap", "Flexi Cap", "Large & Mid Cap"]
-        
-        for category in categories:
-            with st.expander(f"📈 {category}"):
-                bench = benchmarks.get(category, {})
-                
-                name = st.text_input("Index Name", value=bench.get('name', ''), key=f"{category}_name")
-                cagr_5y = st.number_input("5Y CAGR (%)", value=float(bench.get('5y_cagr', 0)), step=0.1, key=f"{category}_5y")
-                
-                benchmarks[category] = {
-                    'name': name,
-                    '5y_cagr': cagr_5y
-                }
-        
-        self.config_data['category_benchmarks'] = benchmarks
-    
-    def _edit_market_context(self):
-        """Edit market context - AI-powered"""
-        st.subheader("Market Context")
-        
-        market_context = self.config_data.get('market_context', {})
-        
-        st.write("Current market context will be displayed in reports")
-        
-        year = st.text_input("Year", value=market_context.get('year', 'CY 2025'))
-        
-        st.markdown("**Index Performance:**")
-        indices = market_context.get('indices', {})
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            nifty50 = st.number_input("Nifty 50 (%)", value=float(indices.get('Nifty 50', 0)), step=0.1)
-            nifty500 = st.number_input("Nifty 500 (%)", value=float(indices.get('Nifty 500', 0)), step=0.1)
-        
-        with col2:
-            midcap = st.number_input("Nifty Midcap 150 (%)", value=float(indices.get('Nifty Midcap 150', 0)), step=0.1)
-            smallcap = st.number_input("Nifty Smallcap 250 (%)", value=float(indices.get('Nifty Smallcap 250', 0)), step=0.1)
-        
-        narrative = st.text_area(
-            "Market Narrative",
-            value=market_context.get('narrative', ''),
-            height=150,
-            help="Brief description of market conditions"
-        )
-        
-        # AI Generation button
-        if st.button("🤖 Generate with AI"):
-            with st.spinner("Generating market narrative with AI..."):
-                ai_narrative = self._generate_market_narrative_with_ai(year, nifty50, nifty500, midcap, smallcap)
-                narrative = ai_narrative
-                st.success("✅ AI narrative generated!")
-        
-        self.config_data['market_context'] = {
-            'year': year,
-            'indices': {
-                'Nifty 50': nifty50,
-                'Nifty 500': nifty500,
-                'Nifty Midcap 150': midcap,
-                'Nifty Smallcap 250': smallcap
-            },
-            'narrative': narrative
-        }
-    
     def _generate_market_narrative_with_ai(self, year, nifty50, nifty500, midcap, smallcap):
         """Generate market narrative using AI"""
         # This will be implemented with Anthropic API

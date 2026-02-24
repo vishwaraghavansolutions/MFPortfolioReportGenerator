@@ -364,27 +364,19 @@ SECTION_ICONS = {
 
 
 @st.cache_data(show_spinner=False)
-def load_all_parquets() -> pd.DataFrame:
-    files = glob.glob(str(PARQUET_DIR / "*.parquet"))
-    if not files:
+def load_parquet(parquet_path: str) -> pd.DataFrame:
+    """Load a single parquet file by path."""
+    try:
+        df = pd.read_parquet(parquet_path)
+        if "year" not in df.columns or df["year"].isna().all():
+            y, m = infer_date(parquet_path)
+            df["year"], df["month"] = y, m
+        for col in ALL_NUM_COLS:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+    except Exception:
         return pd.DataFrame()
-    frames = []
-    for fp in files:
-        try:
-            df = pd.read_parquet(fp)
-            if "year" not in df.columns or df["year"].isna().all():
-                y, m = infer_date(fp)
-                df["year"], df["month"] = y, m
-            frames.append(df)
-        except Exception:
-            pass
-    if not frames:
-        return pd.DataFrame()
-    combined = pd.concat(frames, ignore_index=True)
-    for col in ALL_NUM_COLS:
-        if col in combined.columns:
-            combined[col] = pd.to_numeric(combined[col], errors="coerce")
-    return combined
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -421,76 +413,91 @@ def styled_df(view, color_cols=None):
 
 with st.sidebar:
 
-    # ── PDF Upload ────────────────────────────────────────────────────────────
-    st.markdown("### 📤 Upload PDFs")
-    uploaded = st.file_uploader(
-        "NSE Index Dashboard PDFs",
-        type=["pdf"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-    )
+    # ── PDF Selector ──────────────────────────────────────────────────────────
+    st.markdown("### 📂 Index Dashboard PDFs")
 
-    if uploaded:
-        processed = []
-        errors    = []
-        for uf in uploaded:
-            save_path    = PDF_DIR / uf.name
-            parquet_path = PARQUET_DIR / (save_path.stem + ".parquet")
-            if parquet_path.exists():
-                continue  # already done
-            # Save PDF to disk
-            with open(save_path, "wb") as f:
-                f.write(uf.read())
-            # Parse & write parquet
-            with st.spinner(f"Parsing {uf.name}…"):
-                try:
-                    _, n_rows = pdf_to_parquet(save_path)
-                    processed.append((uf.name, n_rows))
-                except Exception as e:
-                    errors.append((uf.name, str(e)))
+    pdf_files = sorted(PDF_DIR.glob("*.pdf"))
 
-        if processed:
-            st.cache_data.clear()
-            for name, n in processed:
-                st.success(f"✅ {name} → {n} rows saved")
-        for name, err in errors:
-            st.error(f"❌ {name}: {err}")
-
-    # ── Existing parquets ─────────────────────────────────────────────────────
-    existing = sorted(PARQUET_DIR.glob("*.parquet"))
-    if existing:
-        st.markdown("**Loaded files:**")
-        for p in existing:
-            y, m = infer_date(p.name)
-            label = f"{MONTH_MAP.get(m,'?')} {y}" if y else p.stem
-            st.markdown(
-                f'<div class="file-item">'
-                f'<span><span class="dot"></span>{p.stem}</span>'
-                f'<span style="color:#38bdf8">{label}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.info("Upload a PDF above to get started.")
+    if not pdf_files:
+        st.info(f"No PDFs found in `{PDF_DIR}`.\nPlace NSE Index Dashboard PDFs there and refresh.")
         st.stop()
+
+    # Build display labels:  "January 2026  (JAN2026.pdf)"
+    def _pdf_label(p: Path) -> str:
+        y, m = infer_date(p.name)
+        date_str = f"{MONTH_MAP.get(m,'?')} {y}" if y else p.stem
+        return f"{date_str}  ·  {p.name}"
+
+    pdf_labels   = [_pdf_label(p) for p in pdf_files]
+    sel_label    = st.selectbox("Select PDF", pdf_labels, label_visibility="collapsed")
+    sel_pdf_path = pdf_files[pdf_labels.index(sel_label)]
+    sel_parquet  = PARQUET_DIR / (sel_pdf_path.stem + ".parquet")
+
+    # Parquet status indicator
+    if sel_parquet.exists():
+        st.markdown(
+            f'<div class="file-item">'
+            f'<span><span class="dot"></span>Parquet ready</span>'
+            f'<span style="color:#38bdf8">{sel_pdf_path.stem}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f'<div class="file-item" style="border-color:#f59e0b">'
+            f'<span><span style="width:8px;height:8px;border-radius:50%;'
+            f'background:#f59e0b;margin-right:8px;display:inline-block"></span>'
+            f'Not yet parsed</span>'
+            f'<span style="color:#f59e0b">{sel_pdf_path.stem}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Refresh / Parse button
+    btn_label = "🔄  Refresh Parquet" if sel_parquet.exists() else "⚡  Parse PDF → Parquet"
+    if st.button(btn_label, use_container_width=True):
+        with st.spinner(f"Parsing {sel_pdf_path.name}…"):
+            try:
+                _, n_rows = pdf_to_parquet(sel_pdf_path)
+                st.cache_data.clear()
+                st.success(f"✅ {n_rows} rows saved to parquet")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ {e}")
+
+    # Auto-parse on first selection if parquet missing
+    if not sel_parquet.exists():
+        with st.spinner(f"Auto-parsing {sel_pdf_path.name}…"):
+            try:
+                _, n_rows = pdf_to_parquet(sel_pdf_path)
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Could not parse PDF: {e}")
+                st.stop()
 
     st.markdown("---")
 
-    # ── Load all data ─────────────────────────────────────────────────────────
-    df_raw = load_all_parquets()
+    # ── Load selected parquet ─────────────────────────────────────────────────
+    df_raw = load_parquet(str(sel_parquet))
     if df_raw.empty:
-        st.warning("No data loaded yet.")
+        st.warning("No data loaded. Try refreshing the parquet.")
         st.stop()
 
-    # ── Period ────────────────────────────────────────────────────────────────
-    st.markdown("### 🗓️ Period")
-    years = sorted(df_raw["year"].dropna().unique().astype(int), reverse=True)
-    sel_year = st.selectbox("Year", years, index=0)
+    # ── Period — inferred from filename, no picker needed ────────────────────
+    years        = sorted(df_raw["year"].dropna().unique().astype(int), reverse=True)
+    sel_year     = int(years[0]) if years else 0
+    months_avail = sorted(df_raw[df_raw["year"]==sel_year]["month"].dropna().unique().astype(int))
+    sel_month    = int(months_avail[-1]) if months_avail else 0
+    sel_month_lbl = MONTH_MAP.get(sel_month, str(sel_month))
 
-    months_avail  = sorted(df_raw[df_raw["year"]==sel_year]["month"].dropna().unique().astype(int))
-    month_options = [MONTH_MAP.get(m, str(m)) for m in months_avail]
-    sel_month_lbl = st.selectbox("Month", month_options, index=len(month_options)-1)
-    sel_month     = MONTH_INV.get(sel_month_lbl, months_avail[-1])
+    st.markdown(
+        f'<div style="background:#0f1e3d;border:1px solid #1e3454;border-radius:8px;'
+        f'padding:0.6rem 1rem;font-size:0.75rem;color:#38bdf8;letter-spacing:0.06em;">'
+        f'📅  {sel_month_lbl} {sel_year}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
 
