@@ -399,47 +399,48 @@ class PortfolioPDFGenerator:
         
         # Equity Fundsif portfolio_data.get('equity_funds'):
         story.append(Paragraph("Equity Fund Performance", self.styles['SectionHeader']))
-        chart = self._create_chart_equity_performance(portfolio_data['equity_funds'])
-        story.append(Image(chart, width=6.5*inch, height=4.5*inch))
-        story.append(Spacer(1, 0.3*inch))
+        if len(portfolio_data.get('equity_funds', [])) > 1:
+            chart = self._create_chart_equity_performance(portfolio_data['equity_funds'])
+            story.append(Image(chart, width=6.5*inch, height=4.5*inch))
+            story.append(Spacer(1, 0.3*inch))
 
-        # ── Styles for wrapping text inside table cells ───────────────────
-        fund_name_style = ParagraphStyle(
-            "FundName",
-            fontName="Helvetica",
-            fontSize=7.5,
-            leading=10,
-            wordWrap="LTR",
-        )
-        index_name_style = ParagraphStyle(
-            "IndexName",
-            fontName="Helvetica",
-            fontSize=7,
-            leading=10,
-            textColor=colors.HexColor("#4a4a4a"),
-            wordWrap="LTR",
-        )
-        header_style = ParagraphStyle(
-            "TableHeader",
-            fontName="Helvetica-Bold",
-            fontSize=8,
-            leading=10,
-            textColor=colors.white,
-        )
-        diff_pos_style = ParagraphStyle(
-            "DiffPos",
-            fontName="Helvetica-Bold",
-            fontSize=7.5,
-            leading=10,
-            textColor=colors.HexColor("#1a7a1a"),
-        )
-        diff_neg_style = ParagraphStyle(
-            "DiffNeg",
-            fontName="Helvetica-Bold",
-            fontSize=7.5,
-            leading=10,
-            textColor=colors.HexColor("#cc0000"),
-        )
+            # ── Styles for wrapping text inside table cells ───────────────────
+            fund_name_style = ParagraphStyle(
+                "FundName",
+                fontName="Helvetica",
+                fontSize=7.5,
+                leading=10,
+                wordWrap="LTR",
+            )
+            index_name_style = ParagraphStyle(
+                "IndexName",
+                fontName="Helvetica",
+                fontSize=7,
+                leading=10,
+                textColor=colors.HexColor("#4a4a4a"),
+                wordWrap="LTR",
+            )
+            header_style = ParagraphStyle(
+                "TableHeader",
+                fontName="Helvetica-Bold",
+                fontSize=8,
+                leading=10,
+                textColor=colors.white,
+            )
+            diff_pos_style = ParagraphStyle(
+                "DiffPos",
+                fontName="Helvetica-Bold",
+                fontSize=7.5,
+                leading=10,
+                textColor=colors.HexColor("#1a7a1a"),
+            )
+            diff_neg_style = ParagraphStyle(
+                "DiffNeg",
+                fontName="Helvetica-Bold",
+                fontSize=7.5,
+                leading=10,
+                textColor=colors.HexColor("#cc0000"),
+            )
 
         # ── Headers ───────────────────────────────────────────────────────
         equity_data = [[
@@ -492,10 +493,11 @@ class PortfolioPDFGenerator:
             story.append(Spacer(1, 0.4*inch))
         # Hybrid Funds
         if portfolio_data.get('hybrid_funds'):
-            story.append(Paragraph("Hybrid Fund Performance", self.styles['SectionHeader']))
-            chart = self._create_chart_hybrid_performance(portfolio_data['hybrid_funds'])
-            story.append(Image(chart, width=6.5*inch, height=3.9*inch))
-            story.append(Spacer(1, 0.3*inch))
+            if len(portfolio_data['hybrid_funds']) > 1:
+                story.append(Paragraph("Hybrid Fund Performance", self.styles['SectionHeader']))
+                chart = self._create_chart_hybrid_performance(portfolio_data['hybrid_funds'])
+                story.append(Image(chart, width=6.5*inch, height=3.9*inch))
+                story.append(Spacer(1, 0.3*inch))
             
             # Hybrid table
             hybrid_data = [['Fund Name', 'XIRR %']]
