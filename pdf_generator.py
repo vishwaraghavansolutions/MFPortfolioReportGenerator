@@ -172,11 +172,11 @@ class PortfolioPDFGenerator:
         ax.set_title('AMC Concentration', fontsize=14, fontweight='bold', pad=20)
         
         for text in texts:
-            text.set_fontsize(10)
+            text.set_fontsize(11)
         for autotext in autotexts:
-            autotext.set_color('white')
+            autotext.set_color('black')
             autotext.set_fontweight('bold')
-            autotext.set_fontsize(9)
+            autotext.set_fontsize(10)
         
         plt.tight_layout()
         
@@ -466,6 +466,13 @@ class PortfolioPDFGenerator:
             diff_str      = f"{diff:+.2f}%"
             diff_style    = diff_pos_style if diff >= 0 else diff_neg_style
 
+            if fund.get('benchmark_index') is None:
+                index_name = "Not Found"
+                bench_3m_str = "—"
+                bench_1yr_str = "—" 
+                diff_str = "—"
+                diff_style = header_style  # grey out difference if lookup failed
+    
             equity_data.append([
                 Paragraph(fund['name'],  fund_name_style),
                 Paragraph(index_name,    index_name_style),
@@ -511,7 +518,7 @@ class PortfolioPDFGenerator:
         if portfolio_data.get('amc_concentration'):
             story.append(Paragraph("AMC Concentration", self.styles['SectionHeader']))
             chart = self._create_chart_amc_concentration(portfolio_data['amc_concentration'])
-            story.append(Image(chart, width=6.5*inch, height=5.2*inch))
+            story.append(Image(chart, width=6*inch, height=3.5*inch))
             story.append(Spacer(1, 0.3*inch))
             
             # AMC table
