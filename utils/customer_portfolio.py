@@ -140,16 +140,20 @@ def get_customer_portfolio(
 
         # Split s_name on '-', use the part before the first '-'
         raw_name = str(row.get("s_name", ""))
-        cleaned = re.sub(r"\b(growth|regular)\b", "", raw_name, flags=re.IGNORECASE)
 
-        # also remove trailing words like "plan" or "option" if they become orphaned
+        # Remove (Erstwhile ...) and (formerly ...)
+        cleaned = re.sub(r"\(.*?Erstwhile.*?\)", "", raw_name, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\(.*?formerly.*?\)", "", cleaned, flags=re.IGNORECASE)
+
+        # Remove growth/regular
+        cleaned = re.sub(r"\b(growth|regular)\b", "", cleaned, flags=re.IGNORECASE)
+        # Remove trailing orphan words
         cleaned = re.sub(r"\b(plan|option)\b", "", cleaned, flags=re.IGNORECASE)
-
-        # collapse multiple spaces and hyphens
+        # Collapse multiple spaces
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        # Normalize hyphens
         cleaned = re.sub(r"\s*-\s*", " - ", cleaned)
-
-        query    = cleaned.split("-")[0].strip()
+        query = cleaned.split("-")[0].strip()
 
         if not query:
             enrichment_rows.append(_empty_row(f"Empty s_name: '{raw_name}'"))
