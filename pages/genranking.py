@@ -8,7 +8,7 @@ st.set_page_config(page_title="Mutual Fund Rank & Score", layout="centered")
 st.title("📊 Mutual Fund Rank & Score Finder")
 
 st.markdown("### Select Fund Details")
-st.write("")B
+st.write("")
 
 # ----------------------------------
 # Load Data
