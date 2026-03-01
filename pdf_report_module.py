@@ -8,7 +8,7 @@ import os
 import streamlit as st
 from datetime import datetime
 import pandas as pd
-from pdf_generator import PortfolioPDFGenerator
+from pdf_generator import MFPortfolioPDFGenerator
 
 
 class PDFReportModule:
@@ -44,8 +44,8 @@ class PDFReportModule:
             report_data = self._prepare_report_data(customer_data, report_config)
             
             # Generate PDF
-            generator = PortfolioPDFGenerator(company_name=self.company_name)
-            generator.generate_portfolio_report(report_data, pdf_path)
+            generator = MFPortfolioPDFGenerator(company_name=self.company_name)
+            generator.generate_report(report_data, pdf_path)
             
             return pdf_path, True, None
             
