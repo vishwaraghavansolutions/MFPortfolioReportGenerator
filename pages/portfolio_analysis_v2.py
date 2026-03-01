@@ -7,12 +7,21 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from pages.config_editor import ConfigEditor
-from pdf_generator import PortfolioPDFGenerator
+from utils.mf_portfolio_pdf_generator  import MFPortfolioPDFGenerator, generate_ai_commentary
 from utils.pdf_utils import format_currency_indian
 import re
+import os
 import utils.navbar as navbar
 from utils.Indices_lookup import SchemeLookup
 from utils.customer_portfolio import get_customer_portfolio
+from utils.mf_qoq_loader import PortfolioDataLoader
+from utils.build_qoq_data import build_qoq_data
+from utils.benchmark_utils import (
+    load_benchmark_returns,
+    build_quarterly_returns_with_benchmarks,
+    _QUARTER_MONTH_MAP
+)
+
 
 scheme_df = pd.read_csv('data/SchemeData2301262313SS.csv')
 scheme_df.columns = scheme_df.columns.str.strip()
@@ -125,6 +134,43 @@ def calculate_portfolio_metrics(customer_df):
         'num_funds': len(customer_df)
     }
 
+@st.cache_data
+def _load_bench(parquet_dir: str) -> pd.DataFrame:
+    """Load all index_dashboard parquet files and combine into one DataFrame."""
+    files = {
+        'Q3_2025':  'Index_Dashboard_MAR2025.parquet',
+        'Q6_2025':  'Index_Dashboard_JUN2025.parquet',
+        'Q9_2025':  'Index_Dashboard_SEP2025.parquet',
+        'Q12_2025': 'Index_Dashboard_DEC2025.parquet',
+        'Q3_2024':  'Index_Dashboard_MAR2024.parquet',
+        'Q6_2024':  'Index_Dashboard_JUN2024.parquet',
+        'Q9_2024':  'Index_Dashboard_SEP2024.parquet',
+        'Q12_2024': 'Index_Dashboard_DEC2024.parquet',
+    }
+
+    dfs = []
+    for qkey, filename in files.items():
+        path = os.path.join(parquet_dir, filename)
+        if not os.path.exists(path):
+            continue
+        df = pd.read_parquet(path)
+        df['index_name'] = df['index_name'].astype(str).str.strip()
+        # Inject year/month from filename if not already in the file
+        if 'year' not in df.columns or 'month' not in df.columns:
+            year, month = _QUARTER_MONTH_MAP[qkey]
+            df['year']  = year
+            df['month'] = month
+        else:
+            df['year']  = pd.to_numeric(df['year'],  errors='coerce').astype('Int64')
+            df['month'] = pd.to_numeric(df['month'], errors='coerce').astype('Int64')
+        dfs.append(df)
+
+    if not dfs:
+        raise FileNotFoundError(f"No index_dashboard parquet files found in: {parquet_dir}")
+
+    combined = pd.concat(dfs, ignore_index=True)
+    st.write(f"Loaded {len(dfs)} benchmark files — {len(combined)} index rows total")
+    return combined
 
 def main():
     st.title("📊 Portfolio Analysis & PDF Generator")
@@ -175,7 +221,7 @@ def main():
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Value", f"₹{format_currency_indian(metrics['total_value'])}")
+        st.metric("Total Value", f"{format_currency_indian(metrics['total_value'])}")
     with col2:
         st.metric("Total Funds", metrics['num_funds'])
     with col3:
@@ -305,11 +351,137 @@ def main():
                         'hybrid_funds': metrics['hybrid_funds'],
                         'amc_concentration': metrics['amc_concentration']
                     }
+
+                    loader = PortfolioDataLoader(bucket_name="winrich")
+                    raw_qoq = loader.load_last_4_quarters(datetime.now(), customer=selected_customer)
+                    st.write("Loaded QoQ data for last 4 quarters")
+                    st.write("### QoQ Raw Data Debug")
+                    qoq_data = {k: df for k, df in raw_qoq.items()
+                                if isinstance(df, pd.DataFrame) and not df.empty}
+
+                    if len(qoq_data) >= 2:
+                        qoq = build_qoq_data(qoq_data)
+                        # Only take these 3 keys — never overwrite the rest
+                        portfolio_data['quarter_labels']    = qoq['quarter_labels']
+                        portfolio_data['quarterly_returns'] = qoq['quarterly_returns']
+                        portfolio_data['blended_return']    = qoq['blended_return']                
+
+                    # ── After building portfolio_data, add these before generate_report ──────────
+
+                    # A) Portfolio growth chart data (from quarterly_dict)
+                    # ── Quarter label helper — inline in your Streamlit file ─────────────────────
+                    _QUARTER_LABEL_MAP = {
+                        'Q3_2023':  "Q1 FY23 (Jan-Mar '23)",
+                        'Q6_2023':  "Q2 FY23 (Apr-Jun '23)",
+                        'Q9_2023':  "Q3 FY23 (Jul-Sep '23)",
+                        'Q12_2023': "Q4 FY23 (Oct-Dec '23)",
+                        'Q3_2024':  "Q1 FY24 (Jan-Mar '24)",
+                        'Q6_2024':  "Q2 FY24 (Apr-Jun '24)",
+                        'Q9_2024':  "Q3 FY24 (Jul-Sep '24)",
+                        'Q12_2024': "Q4 FY24 (Oct-Dec '24)",
+                        'Q3_2025':  "Q1 FY25 (Jan-Mar '25)",
+                        'Q6_2025':  "Q2 FY25 (Apr-Jun '25)",
+                        'Q9_2025':  "Q3 FY25 (Jul-Sep '25)",
+                        'Q12_2025': "Q4 FY25 (Oct-Dec '25)",
+                        'Q3_2026':  "Q1 FY26 (Jan-Mar '26)",
+                    }
+
+                    # ── Build portfolio_trend from qoq_data ───────────────────────────────────────
+                    def _sort_quarter_keys(keys):
+                        def _key(k):
+                            parts = k.split('_')
+                            month = int(parts[0].replace('Q', ''))
+                            year  = int(parts[1])
+                            return year * 100 + month
+                        return sorted(keys, key=_key)
+
+                    portfolio_data['portfolio_trend'] = []
+                    for k in _sort_quarter_keys(qoq_data.keys()):
+                        df = qoq_data[k].copy()
+                        df.columns        = [str(c).strip().strip("'\"") for c in df.columns]
+                        df['TotalInvAmt'] = pd.to_numeric(df['TotalInvAmt'], errors='coerce').fillna(0)
+                        df['CurValue']    = pd.to_numeric(df['CurValue'],    errors='coerce').fillna(0)
+                        df['foliono']     = df['foliono'].astype(str).str.strip()
+
+                        # ── FIX: last value per folio to avoid double-counting ───────────────────
+                        folio_latest  = df.groupby('foliono').last().reset_index()
+                        total_invested = float(folio_latest['TotalInvAmt'].sum())
+                        total_current  = float(folio_latest['CurValue'].sum())
+
+                        portfolio_data['portfolio_trend'].append({
+                            'label':    _QUARTER_LABEL_MAP.get(k, k),
+                            'invested': total_invested,
+                            'current':  total_current,
+                        })                    
+                    benchmark_df = _load_bench("data")
+
+                    # Sorted quarter keys matching your quarter_labels order
+                    quarter_keys = sorted(qoq_data.keys())   # oldest → newest
+
+                    # Rebuild quarterly_returns with real benchmark rows
+                    portfolio_data['quarterly_returns'] = build_quarterly_returns_with_benchmarks(
+                        portfolio_data,
+                        benchmark_df,
+                        quarter_keys,
+                    )
+
+                    # Verify
+                    for row in portfolio_data['quarterly_returns']:
+                        print(f"{'[BENCH]' if row['is_benchmark'] else '[FUND] '} "
+                            f"{row['name'][:40]:40s} {row['returns']}")
                     
+                    # C) Ensure quarter_labels are sorted oldest → newest
+                    # Your loader returns ['Q12_2025','Q9_2025','Q6_2025','Q3_2025']
+                    # After filtering and building QoQ, verify:
+                    st.write("quarter_labels:", portfolio_data.get('quarter_labels'))
+                    # Should read left-to-right: oldest quarter first 
+                    st.write("### Portfolio Data Debug")
+                    print("Index names in parquet:")
+                    print(benchmark_df['index_name'].unique().tolist())
+
+                    print("\nBenchmark indices in equity_funds:")
+                    print([f.get('benchmark_index') for f in portfolio_data.get('equity_funds', [])])
+                    st.write(f"**Keys:** {list(portfolio_data.keys())}")
+                    st.write(f"**client_name:** {portfolio_data.get('client_name')}")
+                    st.write(f"**summary keys:** {list(portfolio_data.get('summary', {}).keys())}")
+
+                    st.write(f"**equity_funds count:** {len(portfolio_data.get('equity_funds', []))}")
+                    if portfolio_data.get('equity_funds'):
+                        st.write(f"**equity_funds[0]:** {portfolio_data['equity_funds'][0]}")
+
+                    st.write(f"**hybrid_funds count:** {len(portfolio_data.get('hybrid_funds', []))}")
+
+                    st.write(f"**client_allocation:** {portfolio_data.get('client_allocation')}")
+                    st.write(f"**model_allocation:** {portfolio_data.get('model_allocation')}")
+
+                    st.write(f"**amc_concentration:** {portfolio_data.get('amc_concentration')}")
+
+                    st.write(f"**quarter_labels:** {portfolio_data.get('quarter_labels')}")
+                    st.write(f"**quarterly_returns count:** {len(portfolio_data.get('quarterly_returns', []))}")
+                    if portfolio_data.get('quarterly_returns'):
+                        st.write(f"**quarterly_returns[0]:** {portfolio_data['quarterly_returns'][0]}")
+
+                    st.write(f"**blended_return:** {portfolio_data.get('blended_return')}")
+                    st.write(f"quarter_labels: {portfolio_data.get('quarter_labels')}")
+                    st.write(f"quarterly_returns count: {len(portfolio_data.get('quarterly_returns', []))}")
+                    st.write(f"blended_return: {portfolio_data.get('blended_return')}")
                     # Generate PDF
                     filename = f"portfolio_report_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                    generator = PortfolioPDFGenerator(company_name)
-                    output_file = generator.generate_portfolio_report(portfolio_data, filename)
+                    #from utils import mf_portfolio_pdf_generator as _mod
+
+                    #st.write("File:", _mod.__file__)
+                    #st.write("Class methods:", [m for m in dir(_mod.MFPortfolioPDFGenerator) 
+                    #         if not m.startswith('__')])
+                    generator = MFPortfolioPDFGenerator(company_name)
+                                        # B) AI commentary
+                    with st.spinner("Generating AI commentary..."):
+                        try:
+                            #portfolio_data['commentary'] = generate_ai_commentary(portfolio_data)
+                            st.success("Commentary generated")
+                        except Exception as e:
+                            st.warning(f"Commentary skipped: {e}")
+
+                    output_file = generator.generate_report(portfolio_data, filename)
                     
                     # Success message
                     st.success("✅ PDF Report Generated Successfully!")

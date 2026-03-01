@@ -19,9 +19,6 @@ Accepts portfolio_data dict with these keys:
     hybrid_funds        : list of dicts  {name, xirr}
     debt_funds          : list of dicts  {name, xirr}  (optional)
     amc_concentration   : dict  {amc_name: fund_count}
-    portfolio_trend     : list of dicts  — one per quarter, oldest first
-                            { label: str, invested: float, current: float }
-                            e.g. [{'label':'Q3 FY24','invested':500000,'current':580000}, ...]
     quarter_labels      : list of str   (optional — skips QoQ if absent)
     quarterly_returns   : list of dicts
                             name, is_benchmark, returns {q0..qN, ttm}
@@ -32,14 +29,8 @@ Accepts portfolio_data dict with these keys:
 
 from __future__ import annotations
 
-import io
 import math
 from datetime import datetime
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
@@ -47,7 +38,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    HRFlowable, Image, PageBreak, Paragraph, SimpleDocTemplate,
+    HRFlowable, PageBreak, Paragraph, SimpleDocTemplate,
     Spacer, Table, TableStyle,
 )
 from reportlab.platypus.flowables import Flowable
@@ -206,289 +197,13 @@ def _draw_footer(canvas, doc, company: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AI Commentary Generator
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _build_commentary_prompt(portfolio_data: dict) -> str:
-    """Build a structured prompt from portfolio_data for Claude to generate commentary."""
-    print(f"[DEBUG] Building commentary prompt for client: {portfolio_data.get('client_name')}")
-    d = portfolio_data
-
-    lines = [
-        "You are a professional mutual fund portfolio analyst at WinRich Professional Services.",
-        "Write a concise portfolio performance commentary for the following client portfolio.",
-        "Use a professional, factual tone. Do NOT use markdown. Use plain text only.",
-        "",
-        "Structure your response with EXACTLY these 5 sections, each starting with the",
-        "section heading on its own line followed by the paragraph body:",
-        "  Portfolio Overview",
-        "  Equity Portfolio",
-        "  Hybrid Portfolio",
-        "  Quarter in Review",
-        "  Key Observations",
-        "",
-        "Keep each section to 3-5 sentences. Reference specific fund names, XIRR values,",
-        "benchmark comparisons, and quarter labels where available.",
-        "",
-        "=== PORTFOLIO DATA ===",
-        f"Client: {d.get('client_name', 'N/A')}",
-        f"Report Date: {d.get('report_date', 'N/A')}",
-    ]
-
-    # Allocation
-    alloc = d.get('client_allocation', {})
-    if alloc:
-        lines.append(f"\nAllocation: " +
-                     ", ".join(f"{k}: {float(v):.1f}%" for k, v in alloc.items()))
-
-    # Equity funds
-    equity = d.get('equity_funds', [])
-    if equity:
-        lines.append("\nEquity Funds (XIRR vs Benchmark 1Y):")
-        for f in equity:
-            name   = f.get('name', '—')
-            xirr   = f.get('xirr')
-            b1y    = f.get('benchmark_return_1yr')
-            bindex = f.get('benchmark_index', '—')
-            xirr_s = f"{xirr:.2f}%" if xirr is not None else "N/A"
-            b1y_s  = f"{b1y:.2f}%"  if b1y  is not None else "N/A"
-            lines.append(f"  - {name}: XIRR={xirr_s}, Benchmark({bindex}) 1Y={b1y_s}")
-
-    # Hybrid funds
-    hybrid = d.get('hybrid_funds', [])
-    if hybrid:
-        lines.append("\nHybrid Funds (XIRR):")
-        for f in hybrid:
-            xirr = f.get('xirr')
-            xirr_s = f"{xirr:.2f}%" if xirr is not None else "N/A"
-            lines.append(f"  - {f.get('name', '—')}: XIRR={xirr_s}")
-
-    # QoQ blended return
-    blended = d.get('blended_return', {})
-    q_labels = d.get('quarter_labels', [])
-    if blended and q_labels:
-        lines.append("\nBlended Portfolio QoQ Returns:")
-        for i, ql in enumerate(q_labels):
-            val = blended.get(f'q{i}')
-            val_s = f"{val:.2f}%" if val is not None else "N/A"
-            lines.append(f"  {ql.replace(chr(10), ' ')}: {val_s}")
-        ttm = blended.get('ttm')
-        if ttm is not None:
-            lines.append(f"  TTM (since inception XIRR): {ttm:.2f}%")
-
-    # Portfolio trend
-    trend = d.get('portfolio_trend', [])
-    if trend:
-        lines.append("\nPortfolio Growth (Invested vs Current Value):")
-        for t in trend:
-            inv = t.get('invested', 0)
-            cur = t.get('current',  0)
-            gain_pct = ((cur - inv) / inv * 100) if inv > 0 else 0
-            lines.append(
-                f"  {t.get('label','').replace(chr(10),' ')}: "
-                f"Invested=₹{inv/1e5:.1f}L, Current=₹{cur/1e5:.1f}L "
-                f"({gain_pct:+.1f}%)")
-
-    lines.append("\n=== END OF DATA ===")
-    lines.append("Write the commentary now. Use plain text. No bullet points. No markdown.")
-    return "\n".join(lines)
-
-
-def _parse_commentary(raw_text: str) -> list[dict]:
-    """
-    Parse the flat AI response text into [{heading, body}, ...] blocks.
-    Looks for known heading keywords and splits accordingly.
-    """
-    print(f"[DEBUG] Parsing commentary from raw text ({len(raw_text)} chars)")
-    known_headings = [
-        "Portfolio Overview",
-        "Equity Portfolio",
-        "Hybrid Portfolio",
-        "Quarter in Review",
-        "Key Observations",
-    ]
-
-    blocks  = []
-    current_heading = None
-    current_body    = []
-
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # Check if this line IS a heading (exact or starts-with match)
-        matched = next((h for h in known_headings
-                        if line.lower().startswith(h.lower())), None)
-        if matched:
-            # Save previous block
-            if current_heading and current_body:
-                blocks.append({
-                    'heading': current_heading,
-                    'body':    ' '.join(current_body).strip(),
-                })
-            current_heading = matched
-            current_body    = []
-            # If text follows the heading on the same line, capture it
-            rest = line[len(matched):].strip().lstrip(':').strip()
-            if rest:
-                current_body.append(rest)
-        else:
-            if current_heading:
-                current_body.append(line)
-
-    # Flush last block
-    if current_heading and current_body:
-        blocks.append({
-            'heading': current_heading,
-            'body':    ' '.join(current_body).strip(),
-        })
-
-    print(f"[DEBUG] Parsed {len(blocks)} commentary block(s): {[b['heading'] for b in blocks]}")
-    return blocks
-
-
-def generate_ai_commentary(portfolio_data: dict) -> list[dict]:
-    """
-    Call the Anthropic API to generate portfolio-specific commentary.
-    Returns a list of {heading, body} dicts ready for the PDF generator.
-
-    Requires the ANTHROPIC_API_KEY environment variable to be set,
-    OR be called from within a Claude artifact (key injected automatically).
-
-    Parameters
-    ----------
-    portfolio_data : dict
-        The same portfolio_data dict passed to generate_report().
-
-    Returns
-    -------
-    list[dict]  — [{heading: str, body: str}, ...]
-        Assign to portfolio_data['commentary'] before calling generate_report().
-    """
-    try:
-        import anthropic
-    except ImportError:
-        raise ImportError(
-            "anthropic package not installed. Run: pip install anthropic"
-        )
-
-    client = anthropic.Anthropic()   # reads ANTHROPIC_API_KEY from env
-
-    prompt = _build_commentary_prompt(portfolio_data)
-    print(f"[DEBUG] Commentary prompt length: {len(prompt)} chars")
-
-    print("[DEBUG] Calling Anthropic API (model=claude-sonnet-4-20250514, max_tokens=1500)")
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    raw_text = message.content[0].text
-    print(f"[DEBUG] Received API response: {len(raw_text)} chars, stop_reason={message.stop_reason}")
-    blocks   = _parse_commentary(raw_text)
-
-    if not blocks:
-        # Fallback: return the whole text as a single block
-        return [{'heading': 'Performance Commentary', 'body': raw_text.strip()}]
-
-    return blocks
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 class MFPortfolioPDFGenerator:
 
     def __init__(self, company_name: str = "WinRich Professional Services"):
         self.company_name = company_name
 
-    # ── Chart: Portfolio Growth Line Chart ───────────────────────────────────
-    def _build_growth_chart(self, trend_data: list[dict]) -> io.BytesIO:
-        """
-        Build a line chart of TotalInvAmt vs CurValue over quarters.
-
-        trend_data: list of dicts, one per quarter, sorted oldest → newest
-            { 'label': 'Q3 FY25', 'invested': 650000.0, 'current': 739384.0 }
-        """
-        print(f"[DEBUG] Building growth chart with {len(trend_data)} data points")
-        labels   = [d['label']    for d in trend_data]
-        invested = [d['invested'] / 1e5 for d in trend_data]   # convert to Lakhs
-        current  = [d['current']  / 1e5 for d in trend_data]
-
-        fig, ax = plt.subplots(figsize=(7.5, 3.2))
-        fig.patch.set_facecolor('#f7f9fd')
-        ax.set_facecolor('#f7f9fd')
-
-        x = range(len(labels))
-
-        # ── Lines ─────────────────────────────────────────────────────────────
-        ax.plot(x, invested, marker='o', linewidth=2.2, markersize=6,
-                color='#2e4899', label='Total Invested', zorder=3)
-        ax.plot(x, current,  marker='s', linewidth=2.2, markersize=6,
-                color='#1a7a1a', label='Current Value',  zorder=3)
-
-        # ── Shaded area between the two lines ─────────────────────────────────
-        ax.fill_between(x, invested, current,
-                        where=[c >= i for c, i in zip(current, invested)],
-                        alpha=0.12, color='#1a7a1a', label='_nolegend_')
-        ax.fill_between(x, invested, current,
-                        where=[c < i for c, i in zip(current, invested)],
-                        alpha=0.12, color='#cc0000', label='_nolegend_')
-
-        # ── Data labels on points ──────────────────────────────────────────────
-        for xi, (inv, cur) in enumerate(zip(invested, current)):
-            ax.annotate(f"₹{inv:.1f}L", (xi, inv),
-                        textcoords="offset points", xytext=(0, -16),
-                        ha='center', fontsize=7, color='#2e4899', fontweight='bold')
-            ax.annotate(f"₹{cur:.1f}L", (xi, cur),
-                        textcoords="offset points", xytext=(0, 7),
-                        ha='center', fontsize=7, color='#1a7a1a', fontweight='bold')
-
-        # ── Axes formatting ───────────────────────────────────────────────────
-        ax.set_xticks(list(x))
-        ax.set_xticklabels(labels, fontsize=8.5)
-        ax.yaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda v, _: f"₹{v:.0f}L"))
-        ax.tick_params(axis='y', labelsize=8)
-        ax.set_ylabel("Amount (in Lakhs ₹)", fontsize=8.5, color='#555555')
-        ax.set_title("Portfolio Growth — Invested vs Current Value",
-                     fontsize=10, fontweight='bold',
-                     color='#1a2a5e', pad=10)
-
-        # ── Grid & spines ─────────────────────────────────────────────────────
-        ax.grid(axis='y', linestyle='--', alpha=0.4, color='#c0cce8')
-        ax.grid(axis='x', linestyle='',  alpha=0)
-        for spine in ['top', 'right']:
-            ax.spines[spine].set_visible(False)
-        for spine in ['left', 'bottom']:
-            ax.spines[spine].set_color('#c0cce8')
-
-        # ── Legend ────────────────────────────────────────────────────────────
-        ax.legend(loc='upper left', fontsize=8, framealpha=0.6,
-                  facecolor='white', edgecolor='#c0cce8')
-
-        plt.tight_layout(pad=1.2)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        buf.seek(0)
-        plt.close(fig)
-        return buf
-
-    def _section_growth_chart(self, trend_data: list[dict]) -> list:
-        """Render the portfolio growth chart as a PDF section."""
-        story = [_p("Portfolio Growth — Invested vs Current Value", 'section')]
-        buf   = self._build_growth_chart(trend_data)
-        img   = Image(buf, width=6.8 * inch, height=2.9 * inch)
-        story.append(img)
-        story.append(_p(
-            "Values shown in Indian Lakhs (₹L). "
-            "Invested = cumulative TotalInvAmt. Current Value = market value at quarter end.",
-            'footnote'))
-        return story
-
     # ── Section: Client Summary ───────────────────────────────────────────────
     def _section_summary(self, summary: dict) -> list:
-        print(f"[DEBUG] Building Client Summary section ({len(summary)} items)")
         story = [_p("Client &amp; Portfolio Summary", 'section')]
 
         items = list(summary.items())
@@ -522,7 +237,6 @@ class MFPortfolioPDFGenerator:
 
     # ── Section 1: Portfolio Allocation Snapshot ──────────────────────────────
     def _section_allocation(self, client_alloc: dict, model_alloc: dict) -> list:
-        print(f"[DEBUG] Building Allocation Snapshot section: client={dict(client_alloc)}")
         story = [_p("1. Portfolio Allocation Snapshot", 'section')]
 
         fund_type_map = {
@@ -568,7 +282,6 @@ class MFPortfolioPDFGenerator:
 
     # ── Section 2: Equity Fund Performance ───────────────────────────────────
     def _section_equity(self, equity_funds: list) -> list:
-        print(f"[DEBUG] Building Equity section with {len(equity_funds)} funds")
         story = [_p("2. Equity Fund Performance vs Benchmark", 'section')]
 
         rows = [[
@@ -627,7 +340,6 @@ class MFPortfolioPDFGenerator:
 
     # ── Section 3: Hybrid Fund Performance ───────────────────────────────────
     def _section_hybrid(self, hybrid_funds: list) -> list:
-        print(f"[DEBUG] Building Hybrid section with {len(hybrid_funds)} funds")
         story = [_p("3. Hybrid Fund Performance", 'section')]
 
         rows = [[
@@ -654,7 +366,6 @@ class MFPortfolioPDFGenerator:
 
     # ── Section 4: Debt Fund Performance (optional) ───────────────────────────
     def _section_debt(self, debt_funds: list) -> list:
-        print(f"[DEBUG] Building Debt section with {len(debt_funds)} funds")
         story = [_p("4. Debt Fund Performance", 'section')]
 
         rows = [[
@@ -678,7 +389,6 @@ class MFPortfolioPDFGenerator:
 
     # ── Section 5: AMC Concentration ─────────────────────────────────────────
     def _section_amc(self, amc_data: dict) -> list:
-        print(f"[DEBUG] Building AMC Concentration section with {len(amc_data)} AMCs")
         story = [_p("5. AMC Concentration", 'section')]
 
         total      = sum(amc_data.values())
@@ -720,7 +430,6 @@ class MFPortfolioPDFGenerator:
     # ── Section 6: QoQ Fund-Level Returns ────────────────────────────────────
     def _section_qoq_fund(self, quarterly_rows: list,
                            q_labels: list, footnote: str = None) -> list:
-        print(f"[DEBUG] Building QoQ Fund-Level section: {len(quarterly_rows)} rows, {len(q_labels)} quarters")
         story = [_p("6. Quarterly Returns — Fund-Level (QoQ)", 'section')]
 
         n_q    = len(q_labels)
@@ -759,7 +468,6 @@ class MFPortfolioPDFGenerator:
     # ── Section 7: QoQ Portfolio-Level Returns ────────────────────────────────
     def _section_qoq_portfolio(self, quarterly_rows: list, q_labels: list,
                                 blended_return: dict, footnote: str = None) -> list:
-        print(f"[DEBUG] Building QoQ Portfolio-Level section: {len(quarterly_rows)} rows, {len(q_labels)} quarters, blended={bool(blended_return)}")
         story = [_p("7. QoQ Portfolio-Level Returns", 'section')]
 
         n_q    = len(q_labels)
@@ -836,7 +544,7 @@ class MFPortfolioPDFGenerator:
 
         page_w = letter[0] - 1.5 * inch
         story  = []
-        print(f"[DEBUG] Generating report for client='{d.get('client_name', 'N/A')}', output='{output_file}'")
+
         # ── Banner ────────────────────────────────────────────────────────────
         client = d.get('client_name', '—')
         rdate  = d.get('report_date', datetime.now().strftime('%B %d, %Y'))
@@ -848,11 +556,6 @@ class MFPortfolioPDFGenerator:
         # ── Client Summary ────────────────────────────────────────────────────
         if d.get('summary'):
             story.extend(self._section_summary(d['summary']))
-            story.append(Spacer(1, 0.12 * inch))
-
-        # ── Portfolio Growth Chart ─────────────────────────────────────────────
-        if d.get('portfolio_trend'):
-            story.extend(self._section_growth_chart(d['portfolio_trend']))
             story.append(Spacer(1, 0.12 * inch))
 
         # ── 1. Allocation Snapshot ────────────────────────────────────────────
@@ -900,19 +603,15 @@ class MFPortfolioPDFGenerator:
                     quarterly_rows, q_labels, blended_return))
                 story.append(Spacer(1, 0.12 * inch))
 
-        # ── Commentary — AI-generated or manually supplied ────────────────────
-        commentary_blocks = d.get('commentary')   # pre-built blocks take priority
-        if not commentary_blocks and d.get('_ai_commentary_raw'):
-            commentary_blocks = _parse_commentary(d['_ai_commentary_raw'])
-
-        if commentary_blocks:
+        # ── Commentary (optional) ─────────────────────────────────────────────
+        if d.get('commentary'):
             story.append(PageBreak())
-            story.append(_p("Overall Performance Commentary", 'section'))
+            story.append(_p("Performance Commentary", 'section'))
             story.append(HRFlowable(width='100%', thickness=1,
                                     color=RULE_COLOR, spaceAfter=6))
-            for block in commentary_blocks:
+            for block in d['commentary']:
                 story.append(_p(block.get('heading', ''), 'comment_h'))
-                story.append(_p(block.get('body',    ''), 'comment_b'))
+                story.append(_p(block.get('body', ''),    'comment_b'))
 
         # ── Disclaimer ────────────────────────────────────────────────────────
         story.append(Spacer(1, 0.15 * inch))
@@ -1006,15 +705,6 @@ if __name__ == "__main__":
             'Mirae Asset Investment Managers (India)':   1,
         },
 
-        # Portfolio growth chart data — one entry per quarter, oldest first
-        # Derived from quarterly_dict: sum(TotalInvAmt), sum(CurValue) per quarter
-        'portfolio_trend': [
-            {'label': "Q1 FY25\n(Apr-Jun '24)", 'invested': 5_800_000, 'current': 6_100_000},
-            {'label': "Q2 FY25\n(Jul-Sep '24)", 'invested': 6_200_000, 'current': 6_750_000},
-            {'label': "Q3 FY25\n(Oct-Dec '24)", 'invested': 6_600_000, 'current': 7_100_000},
-            {'label': "Q4 FY25\n(Jan-Mar '25)", 'invested': 6_900_000, 'current': 7_393_846},
-        ],
-
         'quarter_labels': [
             "Q1 FY25 (Apr-Jun '24)",
             "Q2 FY25 (Jul-Sep '24)",
@@ -1035,14 +725,6 @@ if __name__ == "__main__":
 
         'blended_return': {'q0': 5.9, 'q1': 5.1, 'q2': 4.7, 'q3': 3.5, 'ttm': 14.2},
     }
-
-    # ── Generate AI commentary and attach to portfolio_data ───────────────────
-    print("Generating AI commentary...")
-    try:
-        sample['commentary'] = generate_ai_commentary(sample)
-        print(f"Commentary generated: {len(sample['commentary'])} sections")
-    except Exception as e:
-        print(f"⚠️  AI commentary skipped: {e}")
 
     out = MFPortfolioPDFGenerator().generate_report(
         sample, "/mnt/user-data/outputs/winrich_final.pdf")

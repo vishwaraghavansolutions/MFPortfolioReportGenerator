@@ -206,14 +206,11 @@ def _draw_footer(canvas, doc, company: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AI Commentary Generator
+# AI Commentary
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _build_commentary_prompt(portfolio_data: dict) -> str:
-    """Build a structured prompt from portfolio_data for Claude to generate commentary."""
-    print(f"[DEBUG] Building commentary prompt for client: {portfolio_data.get('client_name')}")
     d = portfolio_data
-
     lines = [
         "You are a professional mutual fund portfolio analyst at WinRich Professional Services.",
         "Write a concise portfolio performance commentary for the following client portfolio.",
@@ -235,48 +232,43 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         f"Report Date: {d.get('report_date', 'N/A')}",
     ]
 
-    # Allocation
     alloc = d.get('client_allocation', {})
     if alloc:
-        lines.append(f"\nAllocation: " +
+        lines.append("\nAllocation: " +
                      ", ".join(f"{k}: {float(v):.1f}%" for k, v in alloc.items()))
 
-    # Equity funds
     equity = d.get('equity_funds', [])
     if equity:
         lines.append("\nEquity Funds (XIRR vs Benchmark 1Y):")
         for f in equity:
-            name   = f.get('name', '—')
-            xirr   = f.get('xirr')
-            b1y    = f.get('benchmark_return_1yr')
-            bindex = f.get('benchmark_index', '—')
-            xirr_s = f"{xirr:.2f}%" if xirr is not None else "N/A"
-            b1y_s  = f"{b1y:.2f}%"  if b1y  is not None else "N/A"
-            lines.append(f"  - {name}: XIRR={xirr_s}, Benchmark({bindex}) 1Y={b1y_s}")
+            xirr  = f.get('xirr')
+            b1y   = f.get('benchmark_return_1yr')
+            lines.append(
+                f"  - {f.get('name','—')}: XIRR="
+                f"{'N/A' if xirr is None else f'{xirr:.2f}%'}, "
+                f"Benchmark({f.get('benchmark_index','—')}) 1Y="
+                f"{'N/A' if b1y is None else f'{b1y:.2f}%'}")
 
-    # Hybrid funds
     hybrid = d.get('hybrid_funds', [])
     if hybrid:
         lines.append("\nHybrid Funds (XIRR):")
         for f in hybrid:
             xirr = f.get('xirr')
-            xirr_s = f"{xirr:.2f}%" if xirr is not None else "N/A"
-            lines.append(f"  - {f.get('name', '—')}: XIRR={xirr_s}")
+            lines.append(f"  - {f.get('name','—')}: XIRR="
+                         f"{'N/A' if xirr is None else f'{xirr:.2f}%'}")
 
-    # QoQ blended return
-    blended = d.get('blended_return', {})
+    blended  = d.get('blended_return', {})
     q_labels = d.get('quarter_labels', [])
     if blended and q_labels:
         lines.append("\nBlended Portfolio QoQ Returns:")
         for i, ql in enumerate(q_labels):
             val = blended.get(f'q{i}')
-            val_s = f"{val:.2f}%" if val is not None else "N/A"
-            lines.append(f"  {ql.replace(chr(10), ' ')}: {val_s}")
+            lines.append(f"  {ql.replace(chr(10),' ')}: "
+                         f"{'N/A' if val is None else f'{val:.2f}%'}")
         ttm = blended.get('ttm')
         if ttm is not None:
-            lines.append(f"  TTM (since inception XIRR): {ttm:.2f}%")
+            lines.append(f"  TTM: {ttm:.2f}%")
 
-    # Portfolio trend
     trend = d.get('portfolio_trend', [])
     if trend:
         lines.append("\nPortfolio Growth (Invested vs Current Value):")
@@ -286,8 +278,7 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
             gain_pct = ((cur - inv) / inv * 100) if inv > 0 else 0
             lines.append(
                 f"  {t.get('label','').replace(chr(10),' ')}: "
-                f"Invested=₹{inv/1e5:.1f}L, Current=₹{cur/1e5:.1f}L "
-                f"({gain_pct:+.1f}%)")
+                f"Invested=₹{inv/1e5:.1f}L, Current=₹{cur/1e5:.1f}L ({gain_pct:+.1f}%)")
 
     lines.append("\n=== END OF DATA ===")
     lines.append("Write the commentary now. Use plain text. No bullet points. No markdown.")
@@ -295,104 +286,56 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
 
 def _parse_commentary(raw_text: str) -> list[dict]:
-    """
-    Parse the flat AI response text into [{heading, body}, ...] blocks.
-    Looks for known heading keywords and splits accordingly.
-    """
-    print(f"[DEBUG] Parsing commentary from raw text ({len(raw_text)} chars)")
     known_headings = [
-        "Portfolio Overview",
-        "Equity Portfolio",
-        "Hybrid Portfolio",
-        "Quarter in Review",
-        "Key Observations",
+        "Portfolio Overview", "Equity Portfolio", "Hybrid Portfolio",
+        "Quarter in Review", "Key Observations",
     ]
-
-    blocks  = []
-    current_heading = None
-    current_body    = []
+    blocks, current_heading, current_body = [], None, []
 
     for line in raw_text.splitlines():
         line = line.strip()
         if not line:
             continue
-        # Check if this line IS a heading (exact or starts-with match)
         matched = next((h for h in known_headings
                         if line.lower().startswith(h.lower())), None)
         if matched:
-            # Save previous block
             if current_heading and current_body:
-                blocks.append({
-                    'heading': current_heading,
-                    'body':    ' '.join(current_body).strip(),
-                })
+                blocks.append({'heading': current_heading,
+                               'body':    ' '.join(current_body).strip()})
             current_heading = matched
             current_body    = []
-            # If text follows the heading on the same line, capture it
             rest = line[len(matched):].strip().lstrip(':').strip()
             if rest:
                 current_body.append(rest)
-        else:
-            if current_heading:
-                current_body.append(line)
+        elif current_heading:
+            current_body.append(line)
 
-    # Flush last block
     if current_heading and current_body:
-        blocks.append({
-            'heading': current_heading,
-            'body':    ' '.join(current_body).strip(),
-        })
-
-    print(f"[DEBUG] Parsed {len(blocks)} commentary block(s): {[b['heading'] for b in blocks]}")
+        blocks.append({'heading': current_heading,
+                       'body':    ' '.join(current_body).strip()})
     return blocks
 
 
 def generate_ai_commentary(portfolio_data: dict) -> list[dict]:
     """
-    Call the Anthropic API to generate portfolio-specific commentary.
-    Returns a list of {heading, body} dicts ready for the PDF generator.
-
-    Requires the ANTHROPIC_API_KEY environment variable to be set,
-    OR be called from within a Claude artifact (key injected automatically).
-
-    Parameters
-    ----------
-    portfolio_data : dict
-        The same portfolio_data dict passed to generate_report().
-
-    Returns
-    -------
-    list[dict]  — [{heading: str, body: str}, ...]
-        Assign to portfolio_data['commentary'] before calling generate_report().
+    Call the Anthropic API to generate portfolio commentary.
+    Returns list[dict] with {heading, body} — assign to portfolio_data['commentary'].
     """
     try:
         import anthropic
     except ImportError:
-        raise ImportError(
-            "anthropic package not installed. Run: pip install anthropic"
-        )
+        raise ImportError("anthropic package not installed. Run: pip install anthropic")
 
-    client = anthropic.Anthropic()   # reads ANTHROPIC_API_KEY from env
-
-    prompt = _build_commentary_prompt(portfolio_data)
-    print(f"[DEBUG] Commentary prompt length: {len(prompt)} chars")
-
-    print("[DEBUG] Calling Anthropic API (model=claude-sonnet-4-20250514, max_tokens=1500)")
-    message = client.messages.create(
+    client   = anthropic.Anthropic()
+    prompt   = _build_commentary_prompt(portfolio_data)
+    message  = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
-
     raw_text = message.content[0].text
-    print(f"[DEBUG] Received API response: {len(raw_text)} chars, stop_reason={message.stop_reason}")
     blocks   = _parse_commentary(raw_text)
-
-    if not blocks:
-        # Fallback: return the whole text as a single block
-        return [{'heading': 'Performance Commentary', 'body': raw_text.strip()}]
-
-    return blocks
+    return blocks or [{'heading': 'Performance Commentary', 'body': raw_text.strip()}]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -401,32 +344,20 @@ class MFPortfolioPDFGenerator:
     def __init__(self, company_name: str = "WinRich Professional Services"):
         self.company_name = company_name
 
-    # ── Chart: Portfolio Growth Line Chart ───────────────────────────────────
     def _build_growth_chart(self, trend_data: list[dict]) -> io.BytesIO:
-        """
-        Build a line chart of TotalInvAmt vs CurValue over quarters.
-
-        trend_data: list of dicts, one per quarter, sorted oldest → newest
-            { 'label': 'Q3 FY25', 'invested': 650000.0, 'current': 739384.0 }
-        """
-        print(f"[DEBUG] Building growth chart with {len(trend_data)} data points")
         labels   = [d['label']    for d in trend_data]
-        invested = [d['invested'] / 1e5 for d in trend_data]   # convert to Lakhs
+        invested = [d['invested'] / 1e5 for d in trend_data]
         current  = [d['current']  / 1e5 for d in trend_data]
 
         fig, ax = plt.subplots(figsize=(7.5, 3.2))
         fig.patch.set_facecolor('#f7f9fd')
         ax.set_facecolor('#f7f9fd')
-
         x = range(len(labels))
 
-        # ── Lines ─────────────────────────────────────────────────────────────
         ax.plot(x, invested, marker='o', linewidth=2.2, markersize=6,
                 color='#2e4899', label='Total Invested', zorder=3)
         ax.plot(x, current,  marker='s', linewidth=2.2, markersize=6,
                 color='#1a7a1a', label='Current Value',  zorder=3)
-
-        # ── Shaded area between the two lines ─────────────────────────────────
         ax.fill_between(x, invested, current,
                         where=[c >= i for c, i in zip(current, invested)],
                         alpha=0.12, color='#1a7a1a', label='_nolegend_')
@@ -434,7 +365,6 @@ class MFPortfolioPDFGenerator:
                         where=[c < i for c, i in zip(current, invested)],
                         alpha=0.12, color='#cc0000', label='_nolegend_')
 
-        # ── Data labels on points ──────────────────────────────────────────────
         for xi, (inv, cur) in enumerate(zip(invested, current)):
             ax.annotate(f"₹{inv:.1f}L", (xi, inv),
                         textcoords="offset points", xytext=(0, -16),
@@ -443,29 +373,21 @@ class MFPortfolioPDFGenerator:
                         textcoords="offset points", xytext=(0, 7),
                         ha='center', fontsize=7, color='#1a7a1a', fontweight='bold')
 
-        # ── Axes formatting ───────────────────────────────────────────────────
         ax.set_xticks(list(x))
         ax.set_xticklabels(labels, fontsize=8.5)
-        ax.yaxis.set_major_formatter(
-            mticker.FuncFormatter(lambda v, _: f"₹{v:.0f}L"))
+        ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"₹{v:.0f}L"))
         ax.tick_params(axis='y', labelsize=8)
         ax.set_ylabel("Amount (in Lakhs ₹)", fontsize=8.5, color='#555555')
         ax.set_title("Portfolio Growth — Invested vs Current Value",
-                     fontsize=10, fontweight='bold',
-                     color='#1a2a5e', pad=10)
-
-        # ── Grid & spines ─────────────────────────────────────────────────────
+                     fontsize=10, fontweight='bold', color='#1a2a5e', pad=10)
         ax.grid(axis='y', linestyle='--', alpha=0.4, color='#c0cce8')
-        ax.grid(axis='x', linestyle='',  alpha=0)
+        ax.grid(axis='x', linestyle='', alpha=0)
         for spine in ['top', 'right']:
             ax.spines[spine].set_visible(False)
         for spine in ['left', 'bottom']:
             ax.spines[spine].set_color('#c0cce8')
-
-        # ── Legend ────────────────────────────────────────────────────────────
         ax.legend(loc='upper left', fontsize=8, framealpha=0.6,
                   facecolor='white', edgecolor='#c0cce8')
-
         plt.tight_layout(pad=1.2)
 
         buf = io.BytesIO()
@@ -475,26 +397,20 @@ class MFPortfolioPDFGenerator:
         return buf
 
     def _section_growth_chart(self, trend_data: list[dict]) -> list:
-        """Render the portfolio growth chart as a PDF section."""
         story = [_p("Portfolio Growth — Invested vs Current Value", 'section')]
         buf   = self._build_growth_chart(trend_data)
-        img   = Image(buf, width=6.8 * inch, height=2.9 * inch)
-        story.append(img)
+        story.append(Image(buf, width=6.8 * inch, height=2.9 * inch))
         story.append(_p(
             "Values shown in Indian Lakhs (₹L). "
             "Invested = cumulative TotalInvAmt. Current Value = market value at quarter end.",
             'footnote'))
         return story
 
-    # ── Section: Client Summary ───────────────────────────────────────────────
     def _section_summary(self, summary: dict) -> list:
-        print(f"[DEBUG] Building Client Summary section ({len(summary)} items)")
         story = [_p("Client &amp; Portfolio Summary", 'section')]
-
         items = list(summary.items())
         mid   = math.ceil(len(items) / 2)
         left, right = items[:mid], items[mid:]
-
         rows = []
         for i in range(max(len(left), len(right))):
             lk, lv = left[i]  if i < len(left)  else ('', '')
@@ -503,7 +419,6 @@ class MFPortfolioPDFGenerator:
                 _p(str(lk), 'cell_b'), _p(str(lv), 'cell'),
                 _p(str(rk), 'cell_b'), _p(str(rv), 'cell'),
             ])
-
         t  = Table(rows, colWidths=[1.6*inch, 2.15*inch, 1.6*inch, 2.15*inch])
         ts = TableStyle([
             ('GRID',          (0, 0), (-1, -1), 0.4, RULE_COLOR),
@@ -520,42 +435,32 @@ class MFPortfolioPDFGenerator:
         story.append(t)
         return story
 
-    # ── Section 1: Portfolio Allocation Snapshot ──────────────────────────────
     def _section_allocation(self, client_alloc: dict, model_alloc: dict) -> list:
-        print(f"[DEBUG] Building Allocation Snapshot section: client={dict(client_alloc)}")
         story = [_p("1. Portfolio Allocation Snapshot", 'section')]
-
         fund_type_map = {
             'Equity': 'Flexi Cap / Large Cap / Mid Cap / ELSS',
             'Hybrid': 'Balanced Advantage / Multi-Asset / BAF',
             'Debt':   'Debt / Liquid / Short Duration / Gilt',
         }
-
         rows = [[
-            _p("Asset Class",    'th_left'),
-            _p("Client %",       'th'),
-            _p("Model %",        'th'),
-            _p("Variance",       'th'),
-            _p("Fund Type",      'th_left'),
+            _p("Asset Class", 'th_left'), _p("Client %", 'th'),
+            _p("Model %", 'th'),          _p("Variance", 'th'),
+            _p("Fund Type", 'th_left'),
         ]]
-
         for ac in client_alloc:
             cv   = float(client_alloc.get(ac, 0))
             mv   = float(model_alloc.get(ac, 0))
             diff = cv - mv
             sign = '+' if diff >= 0 else ''
-            diff_col = (GREY_TEXT if abs(diff) < 0.01
-                        else GREEN if diff > 0 else RED)
+            diff_col = (GREY_TEXT if abs(diff) < 0.01 else GREEN if diff > 0 else RED)
             rows.append([
                 _p(ac, 'cell_b'),
-                _p(f"{cv:.2f}%",         'cell_bc'),
-                _p(f"{mv:.2f}%",         'cell_bc'),
-                Paragraph(
-                    f"<font color='{diff_col.hexval()}'>{sign}{diff:.2f}%</font>",
-                    S['cell_bc']),
+                _p(f"{cv:.2f}%", 'cell_bc'),
+                _p(f"{mv:.2f}%", 'cell_bc'),
+                Paragraph(f"<font color='{diff_col.hexval()}'>{sign}{diff:.2f}%</font>",
+                          S['cell_bc']),
                 _p(fund_type_map.get(ac, '—'), 'cell_sm'),
             ])
-
         t  = Table(rows, colWidths=[1.2*inch, 1.0*inch, 1.0*inch, 0.9*inch, 3.4*inch])
         ts = _base_ts()
         ts.add('ALIGN', (0, 0), (0, -1), 'LEFT')
@@ -566,36 +471,23 @@ class MFPortfolioPDFGenerator:
         story.append(t)
         return story
 
-    # ── Section 2: Equity Fund Performance ───────────────────────────────────
     def _section_equity(self, equity_funds: list) -> list:
-        print(f"[DEBUG] Building Equity section with {len(equity_funds)} funds")
         story = [_p("2. Equity Fund Performance vs Benchmark", 'section')]
-
-        rows = [[
-            _p("Fund Name",       'th_left'),
-            _p("Benchmark Index", 'th_left'),
-            _p("XIRR",            'th'),
-            _p("Bench 1M",        'th'),
-            _p("Bench 3M",        'th'),
-            _p("Bench 1Y",        'th'),
-            _p("Bench 3Y",        'th'),
-            _p("Bench 5Y",        'th'),
+        rows  = [[
+            _p("Fund Name",       'th_left'), _p("Benchmark Index", 'th_left'),
+            _p("XIRR",            'th'),      _p("Bench 1M",        'th'),
+            _p("Bench 3M",        'th'),      _p("Bench 1Y",        'th'),
+            _p("Bench 3Y",        'th'),      _p("Bench 5Y",        'th'),
         ]]
-
         for f in equity_funds:
-            # Clean up long fund names — strip common suffixes
             name = f.get('name', '—')
             for suffix in [
                 ' (Erstwhile Kotak Standard Multicap Fund - Gr)',
                 ' (Erstwhile Kotak Emerging Equity Scheme)',
-                ' - Regular Plan - Growth',
-                ' - Regular Growth',
-                ' - Regular Plan',
-                ' Regular Growth',
-                ' - Growth',
+                ' - Regular Plan - Growth', ' - Regular Growth',
+                ' - Regular Plan', ' Regular Growth', ' - Growth',
             ]:
                 name = name.replace(suffix, '')
-
             rows.append([
                 _p(name.strip(), 'cell_b'),
                 _p(f.get('benchmark_index') or '—', 'cell_sm'),
@@ -606,12 +498,11 @@ class MFPortfolioPDFGenerator:
                 _ret(f.get('benchmark_return_3yr'), color_it=True),
                 _ret(f.get('benchmark_return_5yr'), color_it=True),
             ])
-
         col_widths = [2.3*inch, 1.25*inch, 0.65*inch,
                       0.55*inch, 0.55*inch, 0.55*inch, 0.55*inch, 0.55*inch]
         t  = Table(rows, colWidths=col_widths, repeatRows=1)
         ts = _base_ts()
-        ts.add('ALIGN',      (0, 0), (1, -1), 'LEFT')
+        ts.add('ALIGN', (0, 0), (1, -1), 'LEFT')
         ts.add('BACKGROUND', (2, 1), (2, -1), colors.HexColor('#eef2fb'))
         for cmd in _alt_rows(len(rows)):
             ts.add(*cmd)
@@ -621,25 +512,14 @@ class MFPortfolioPDFGenerator:
             "XIRR = annualised return since first investment. "
             "Benchmark columns show point-to-point returns for the given period. "
             "1Y, 3Y, 5Y are CAGR. 1M and 3M are absolute. "
-            "Past performance is not indicative of future returns.",
-            'footnote'))
+            "Past performance is not indicative of future returns.", 'footnote'))
         return story
 
-    # ── Section 3: Hybrid Fund Performance ───────────────────────────────────
     def _section_hybrid(self, hybrid_funds: list) -> list:
-        print(f"[DEBUG] Building Hybrid section with {len(hybrid_funds)} funds")
         story = [_p("3. Hybrid Fund Performance", 'section')]
-
-        rows = [[
-            _p("Fund Name", 'th_left'),
-            _p("XIRR",      'th'),
-        ]]
+        rows  = [[_p("Fund Name", 'th_left'), _p("XIRR", 'th')]]
         for f in hybrid_funds:
-            rows.append([
-                _p(f.get('name', '—'), 'cell_b'),
-                _xirr_cell(f.get('xirr')),
-            ])
-
+            rows.append([_p(f.get('name', '—'), 'cell_b'), _xirr_cell(f.get('xirr'))])
         t  = Table(rows, colWidths=[5.9*inch, 0.9*inch], repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0, 0), (0, -1), 'LEFT')
@@ -647,26 +527,14 @@ class MFPortfolioPDFGenerator:
             ts.add(*cmd)
         t.setStyle(ts)
         story.append(t)
-        story.append(_p(
-            "XIRR = Extended Internal Rate of Return (since inception).",
-            'footnote'))
+        story.append(_p("XIRR = Extended Internal Rate of Return (since inception).", 'footnote'))
         return story
 
-    # ── Section 4: Debt Fund Performance (optional) ───────────────────────────
     def _section_debt(self, debt_funds: list) -> list:
-        print(f"[DEBUG] Building Debt section with {len(debt_funds)} funds")
         story = [_p("4. Debt Fund Performance", 'section')]
-
-        rows = [[
-            _p("Fund Name", 'th_left'),
-            _p("XIRR",      'th'),
-        ]]
+        rows  = [[_p("Fund Name", 'th_left'), _p("XIRR", 'th')]]
         for f in debt_funds:
-            rows.append([
-                _p(f.get('name', '—'), 'cell_b'),
-                _xirr_cell(f.get('xirr')),
-            ])
-
+            rows.append([_p(f.get('name', '—'), 'cell_b'), _xirr_cell(f.get('xirr'))])
         t  = Table(rows, colWidths=[5.9*inch, 0.9*inch], repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0, 0), (0, -1), 'LEFT')
@@ -676,18 +544,14 @@ class MFPortfolioPDFGenerator:
         story.append(t)
         return story
 
-    # ── Section 5: AMC Concentration ─────────────────────────────────────────
     def _section_amc(self, amc_data: dict) -> list:
-        print(f"[DEBUG] Building AMC Concentration section with {len(amc_data)} AMCs")
-        story = [_p("5. AMC Concentration", 'section')]
-
+        story      = [_p("5. AMC Concentration", 'section')]
         total      = sum(amc_data.values())
         sorted_amc = sorted(amc_data.items(), key=lambda x: x[1], reverse=True)
-
         rows = [[
-            _p("AMC Name",        'th_left'),
-            _p("No. of Funds",    'th'),
-            _p("% of Portfolio",  'th'),
+            _p("AMC Name", 'th_left'),
+            _p("No. of Funds", 'th'),
+            _p("% of Portfolio", 'th'),
         ]]
         for amc, count in sorted_amc:
             pct = (count / total * 100) if total > 0 else 0
@@ -696,13 +560,7 @@ class MFPortfolioPDFGenerator:
                 _p(str(count),    'cell_bc'),
                 _p(f"{pct:.1f}%", 'cell_bc'),
             ])
-        # Total row
-        rows.append([
-            _p("Total", 'cell_b'),
-            _p(str(total), 'cell_bc'),
-            _p("100.0%",   'cell_bc'),
-        ])
-
+        rows.append([_p("Total", 'cell_b'), _p(str(total), 'cell_bc'), _p("100.0%", 'cell_bc')])
         t  = Table(rows, colWidths=[4.6*inch, 1.1*inch, 1.1*inch], repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0, 0), (0, -1), 'LEFT')
@@ -717,31 +575,25 @@ class MFPortfolioPDFGenerator:
         story.append(t)
         return story
 
-    # ── Section 6: QoQ Fund-Level Returns ────────────────────────────────────
     def _section_qoq_fund(self, quarterly_rows: list,
                            q_labels: list, footnote: str = None) -> list:
-        print(f"[DEBUG] Building QoQ Fund-Level section: {len(quarterly_rows)} rows, {len(q_labels)} quarters")
-        story = [_p("6. Quarterly Returns — Fund-Level (QoQ)", 'section')]
-
+        story  = [_p("6. Quarterly Returns — Fund-Level (QoQ)", 'section')]
         n_q    = len(q_labels)
         q_keys = [f'q{i}' for i in range(n_q)]
-
         header = [_p("Fund Name", 'th_left')]
         for ql in q_labels:
             header.append(_p(ql.replace('\n', ' '), 'th'))
         header.append(_p("TTM", 'th'))
-
         rows = [header]
         for entry in quarterly_rows:
             if entry.get('is_benchmark'):
                 continue
-            r = entry.get('returns', {})
+            r   = entry.get('returns', {})
             row = [_p(entry.get('name', '—'), 'cell_b')]
             for qk in q_keys:
                 row.append(_ret(r.get(qk)))
             row.append(_ret(r.get('ttm'), bold=True))
             rows.append(row)
-
         col_widths = [2.6*inch] + [0.72*inch] * n_q + [0.75*inch]
         t  = Table(rows, colWidths=col_widths, repeatRows=1)
         ts = _base_ts()
@@ -750,158 +602,124 @@ class MFPortfolioPDFGenerator:
             ts.add(*cmd)
         t.setStyle(ts)
         story.append(t)
-
-        fn = footnote or ("Returns are annualised XIRR for the quarter window. "
-                          "TTM = since-inception XIRR as of latest quarter.")
-        story.append(_p(fn, 'footnote'))
+        story.append(_p(footnote or (
+            "Returns are annualised XIRR for the quarter window. "
+            "TTM = since-inception XIRR as of latest quarter."), 'footnote'))
         return story
 
-    # ── Section 7: QoQ Portfolio-Level Returns ────────────────────────────────
     def _section_qoq_portfolio(self, quarterly_rows: list, q_labels: list,
                                 blended_return: dict, footnote: str = None) -> list:
-        print(f"[DEBUG] Building QoQ Portfolio-Level section: {len(quarterly_rows)} rows, {len(q_labels)} quarters, blended={bool(blended_return)}")
-        story = [_p("7. QoQ Portfolio-Level Returns", 'section')]
-
+        story  = [_p("7. QoQ Portfolio-Level Returns", 'section')]
         n_q    = len(q_labels)
         q_keys = [f'q{i}' for i in range(n_q)]
-
         header = [_p("Fund / Benchmark", 'th_left')]
         for ql in q_labels:
             header.append(_p(ql.replace('\n', ' '), 'th'))
         header.append(_p("TTM", 'th'))
-
         rows = [header]
         for entry in quarterly_rows:
             r        = entry.get('returns', {})
             is_bench = entry.get('is_benchmark', False)
-            name_p   = _p(entry.get('name', '—'), 'cell_it' if is_bench else 'cell_b')
-            row      = [name_p]
+            row      = [_p(entry.get('name', '—'), 'cell_it' if is_bench else 'cell_b')]
             for qk in q_keys:
                 row.append(_ret(r.get(qk), color_it=not is_bench))
             row.append(_ret(r.get('ttm'), bold=not is_bench, color_it=not is_bench))
             rows.append(row)
-
-        # Blended total row
         if blended_return:
             blend = [_p("Overall Portfolio (Blended)", 'cell_bc')]
             for qk in q_keys:
                 blend.append(_ret(blended_return.get(qk), bold=True))
             blend.append(_ret(blended_return.get('ttm'), bold=True))
             rows.append(blend)
-
         col_widths = [2.6*inch] + [0.72*inch] * n_q + [0.75*inch]
         t  = Table(rows, colWidths=col_widths, repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0, 0), (0, -1), 'LEFT')
-
         for i, entry in enumerate(quarterly_rows, start=1):
             if entry.get('is_benchmark'):
                 ts.add('BACKGROUND', (0, i), (-1, i), BENCH_BG)
             elif i % 2 == 0:
                 ts.add('BACKGROUND', (0, i), (-1, i), ALT_ROW)
-
         if blended_return:
             last = len(rows) - 1
             ts.add('BACKGROUND', (0, last), (-1, last), NAVY)
             ts.add('TEXTCOLOR',  (0, last), (-1, last), WHITE)
             ts.add('FONTNAME',   (0, last), (-1, last), 'Helvetica-Bold')
             ts.add('LINEABOVE',  (0, last), (-1, last), 1.5, MID_BLUE)
-
         t.setStyle(ts)
         story.append(t)
-
-        fn = footnote or ("Benchmark rows shown in tinted rows directly below each fund. "
-                          "Blended return = value-weighted average across all funds.")
-        story.append(_p(fn, 'footnote'))
+        story.append(_p(footnote or (
+            "Benchmark rows shown in tinted rows directly below each fund. "
+            "Blended return = value-weighted average across all funds."), 'footnote'))
         return story
 
-    # ── Page callbacks ────────────────────────────────────────────────────────
     def _page_cb(self, canvas, doc):
         _draw_footer(canvas, doc, self.company_name)
 
-    # ── Main entry point ──────────────────────────────────────────────────────
     def generate_report(self, portfolio_data: dict, output_file: str) -> str:
-        """
-        Build the full PDF report and write to output_file.
-        Returns output_file path.
-        """
         d = portfolio_data
         self.company_name = d.get('company_name', self.company_name)
 
         doc = SimpleDocTemplate(
             output_file, pagesize=letter,
-            topMargin=0.6 * inch, bottomMargin=0.75 * inch,
-            leftMargin=0.75 * inch, rightMargin=0.75 * inch,
+            topMargin=0.6*inch, bottomMargin=0.75*inch,
+            leftMargin=0.75*inch, rightMargin=0.75*inch,
         )
-
         page_w = letter[0] - 1.5 * inch
         story  = []
-        print(f"[DEBUG] Generating report for client='{d.get('client_name', 'N/A')}', output='{output_file}'")
-        # ── Banner ────────────────────────────────────────────────────────────
+
         client = d.get('client_name', '—')
         rdate  = d.get('report_date', datetime.now().strftime('%B %d, %Y'))
-        meta1  = f"Client: {client}   |   Report Date: {rdate}"
-        meta2  = f"Prepared by: {d.get('prepared_by', self.company_name)}"
-        story.append(HeaderBanner(page_w, self.company_name, [meta1, meta2]))
-        story.append(Spacer(1, 0.15 * inch))
+        story.append(HeaderBanner(page_w, self.company_name, [
+            f"Client: {client}   |   Report Date: {rdate}",
+            f"Prepared by: {d.get('prepared_by', self.company_name)}",
+        ]))
+        story.append(Spacer(1, 0.15*inch))
 
-        # ── Client Summary ────────────────────────────────────────────────────
         if d.get('summary'):
             story.extend(self._section_summary(d['summary']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── Portfolio Growth Chart ─────────────────────────────────────────────
         if d.get('portfolio_trend'):
             story.extend(self._section_growth_chart(d['portfolio_trend']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── 1. Allocation Snapshot ────────────────────────────────────────────
         client_alloc = d.get('client_allocation', {})
         model_alloc  = d.get('model_allocation',  {})
         if client_alloc and model_alloc:
             story.extend(self._section_allocation(client_alloc, model_alloc))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── 2. Equity Funds ───────────────────────────────────────────────────
         if d.get('equity_funds'):
             story.extend(self._section_equity(d['equity_funds']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── 3. Hybrid Funds ───────────────────────────────────────────────────
         if d.get('hybrid_funds'):
             story.extend(self._section_hybrid(d['hybrid_funds']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── 4. Debt Funds (optional) ──────────────────────────────────────────
         if d.get('debt_funds'):
             story.extend(self._section_debt(d['debt_funds']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── 5. AMC Concentration ──────────────────────────────────────────────
         if d.get('amc_concentration'):
             story.extend(self._section_amc(d['amc_concentration']))
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.12*inch))
 
-        # ── QoQ sections — only if quarter data is present ───────────────────
-        q_labels        = d.get('quarter_labels',    [])
-        quarterly_rows  = d.get('quarterly_returns', [])
-        blended_return  = d.get('blended_return',    {})
+        q_labels       = d.get('quarter_labels',    [])
+        quarterly_rows = d.get('quarterly_returns', [])
+        blended_return = d.get('blended_return',    {})
 
         if quarterly_rows and q_labels:
             story.append(PageBreak())
-
-            # ── 6. QoQ Fund-Level ─────────────────────────────────────────────
             story.extend(self._section_qoq_fund(quarterly_rows, q_labels))
-            story.append(Spacer(1, 0.12 * inch))
-
-            # ── 7. QoQ Portfolio-Level ────────────────────────────────────────
+            story.append(Spacer(1, 0.12*inch))
             if blended_return:
                 story.extend(self._section_qoq_portfolio(
                     quarterly_rows, q_labels, blended_return))
-                story.append(Spacer(1, 0.12 * inch))
+                story.append(Spacer(1, 0.12*inch))
 
-        # ── Commentary — AI-generated or manually supplied ────────────────────
-        commentary_blocks = d.get('commentary')   # pre-built blocks take priority
+        commentary_blocks = d.get('commentary')
         if not commentary_blocks and d.get('_ai_commentary_raw'):
             commentary_blocks = _parse_commentary(d['_ai_commentary_raw'])
 
@@ -914,136 +732,16 @@ class MFPortfolioPDFGenerator:
                 story.append(_p(block.get('heading', ''), 'comment_h'))
                 story.append(_p(block.get('body',    ''), 'comment_b'))
 
-        # ── Disclaimer ────────────────────────────────────────────────────────
-        story.append(Spacer(1, 0.15 * inch))
+        story.append(Spacer(1, 0.15*inch))
         story.append(HRFlowable(width='100%', thickness=0.5,
                                 color=RULE_COLOR, spaceAfter=4))
-        disclaimer = d.get(
-            'disclaimer',
+        disclaimer = d.get('disclaimer', (
             "This report is prepared by WinRich Professional Services for informational "
             "purposes only and does not constitute investment advice. Mutual fund investments "
             "are subject to market risks. Past performance is not indicative of future returns. "
             "Please read all scheme-related documents carefully before investing. "
-            "Data sourced from fund houses and AMFI.",
-        )
+            "Data sourced from fund houses and AMFI."))
         story.append(Paragraph(f"<b>Disclaimer:</b> {disclaimer}", S['disclaimer']))
 
         doc.build(story, onFirstPage=self._page_cb, onLaterPages=self._page_cb)
         return output_file
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Standalone test
-# ══════════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
-    import numpy as np
-
-    sample = {
-        'company_name': 'WinRich Professional Services',
-        'client_name':  'A Balamurugan',
-        'report_date':  'February 26, 2026',
-        'prepared_by':  'WinRich Research Desk',
-
-        'summary': {
-            'Client Name':           'A Balamurugan',
-            'Email':                 'B********@GMAIL.COM',
-            'Mobile':                '******9371',
-            'Report Date':           'February 26, 2026',
-            'Total Portfolio Value': '₹73,93,846.65',
-            'Total Funds':           '13',
-            'Equity Allocation':     '54.33%',
-            'Hybrid Allocation':     '34.27%',
-            'Debt Allocation':       '11.40%',
-            'Number of AMCs':        '7',
-        },
-
-        'client_allocation': {
-            'Equity': np.float64(54.33),
-            'Hybrid': np.float64(34.27),
-            'Debt':   np.float64(11.40),
-        },
-        'model_allocation': {
-            'Equity': np.float64(65.0),
-            'Hybrid': np.float64(20.0),
-            'Debt':   np.float64(15.0),
-        },
-
-        'equity_funds': [
-            {'name': 'Canara Robeco Large Cap Fund - Regular Growth',
-             'xirr': 13.09, 'benchmark_index': 'Nifty 50',
-             'benchmark_return_1m': -3.04, 'benchmark_return_3m': -1.45,
-             'benchmark_return_1yr': 8.97, 'benchmark_return_3yr': 14.08,
-             'benchmark_return_5yr': 14.54},
-            {'name': 'HDFC Large and Mid Cap Fund - Regular Plan - Growth',
-             'xirr': 15.14, 'benchmark_index': 'Nifty LargeMidcap 250',
-             'benchmark_return_1m': -3.2,  'benchmark_return_3m': -2.04,
-             'benchmark_return_1yr': 8.98, 'benchmark_return_3yr': 19.34,
-             'benchmark_return_5yr': 19.01},
-            {'name': 'Kotak Flexicap Fund - Growth (Regular Plan) (Erstwhile Kotak Standard Multicap Fund - Gr)',
-             'xirr': 17.07, 'benchmark_index': 'Nifty 500',
-             'benchmark_return_1m': -3.27, 'benchmark_return_3m': -2.56,
-             'benchmark_return_1yr': 7.98, 'benchmark_return_3yr': 16.72,
-             'benchmark_return_5yr': 16.54},
-            {'name': 'Mirae Asset Large Cap Fund - Regular Plan',
-             'xirr': 14.17, 'benchmark_index': 'Nifty 50',
-             'benchmark_return_1m': -3.04, 'benchmark_return_3m': -1.45,
-             'benchmark_return_1yr': 8.97, 'benchmark_return_3yr': 14.08,
-             'benchmark_return_5yr': 14.54},
-        ],
-
-        'hybrid_funds': [
-            {'name': 'Edelweiss Balanced Advantage Fund - Regular Growth', 'xirr': 11.25},
-            {'name': 'ICICI Prudential Balanced Advantage Fund - Growth',   'xirr': 12.50},
-            {'name': 'ICICI Prudential Multi-Asset Fund - Growth',          'xirr': 16.78},
-        ],
-
-        'amc_concentration': {
-            'Canara Robeco Asset Management Company':    1,
-            'Edelweiss Asset Management':                1,
-            'HDFC Asset Management Company':             1,
-            'ICICI Prudential Asset Management Company': 3,
-            'Kotak Mahindra Asset Management Company':   2,
-            'Mirae Asset Investment Managers (India)':   1,
-        },
-
-        # Portfolio growth chart data — one entry per quarter, oldest first
-        # Derived from quarterly_dict: sum(TotalInvAmt), sum(CurValue) per quarter
-        'portfolio_trend': [
-            {'label': "Q1 FY25\n(Apr-Jun '24)", 'invested': 5_800_000, 'current': 6_100_000},
-            {'label': "Q2 FY25\n(Jul-Sep '24)", 'invested': 6_200_000, 'current': 6_750_000},
-            {'label': "Q3 FY25\n(Oct-Dec '24)", 'invested': 6_600_000, 'current': 7_100_000},
-            {'label': "Q4 FY25\n(Jan-Mar '25)", 'invested': 6_900_000, 'current': 7_393_846},
-        ],
-
-        'quarter_labels': [
-            "Q1 FY25 (Apr-Jun '24)",
-            "Q2 FY25 (Jul-Sep '24)",
-            "Q3 FY25 (Oct-Dec '24)",
-            "Q4 FY25 (Jan-Mar '25)",
-        ],
-
-        'quarterly_returns': [
-            {'name': 'Canara Robeco Large Cap Fund', 'is_benchmark': False,
-             'returns': {'q0': 6.1, 'q1': 5.3, 'q2': 4.8, 'q3': 3.2, 'ttm': 13.09}},
-            {'name': 'Kotak Flexicap Fund',          'is_benchmark': False,
-             'returns': {'q0': 7.2, 'q1': 6.1, 'q2': 5.9, 'q3': 4.1, 'ttm': 17.07}},
-            {'name': 'Mirae Asset Large Cap Fund',   'is_benchmark': False,
-             'returns': {'q0': 5.9, 'q1': 5.1, 'q2': 4.6, 'q3': 3.8, 'ttm': 14.17}},
-            {'name': 'Edelweiss BAF',                'is_benchmark': False,
-             'returns': {'q0': 4.2, 'q1': 3.8, 'q2': 3.5, 'q3': 2.9, 'ttm': 11.25}},
-        ],
-
-        'blended_return': {'q0': 5.9, 'q1': 5.1, 'q2': 4.7, 'q3': 3.5, 'ttm': 14.2},
-    }
-
-    # ── Generate AI commentary and attach to portfolio_data ───────────────────
-    print("Generating AI commentary...")
-    try:
-        sample['commentary'] = generate_ai_commentary(sample)
-        print(f"Commentary generated: {len(sample['commentary'])} sections")
-    except Exception as e:
-        print(f"⚠️  AI commentary skipped: {e}")
-
-    out = MFPortfolioPDFGenerator().generate_report(
-        sample, "/mnt/user-data/outputs/winrich_final.pdf")
-    print(f"Generated: {out}")
