@@ -95,7 +95,7 @@ def show_home_page():
     
     with col1:
         if st.button("📈 Portfolio Analysis", use_container_width=True):
-            st.switch_page("pages/portfolio_analysis_v2.py")
+            st.switch_page("pages/portfolio_analysis.py")
     
     with col2:
         if st.button("📄 Generate PDF Reports", use_container_width=True):

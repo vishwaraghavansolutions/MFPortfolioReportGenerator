@@ -76,7 +76,7 @@ OBSERVATION_THRESHOLDS = {
     "amc_concentration_count": 3
 }
 
-USE_CUSTOM_THRESHOLDS = True  # Set to False to disable observation flags
+USE_CUSTOM_THRESHOLDS = False  # Set to False to disable observation flags
 # ============================================================
 # FILE PATHS (Do not edit through UI)
 # ============================================================

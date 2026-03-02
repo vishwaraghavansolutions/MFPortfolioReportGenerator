@@ -131,11 +131,11 @@ def build_qoq_data(quarterly_dict: dict) -> dict:
 
     # ── FIX: normalise ALL DataFrames upfront before any processing ───────────
     quarterly_dict = {k: _prep_df(df) for k, df in quarterly_dict.items()}
-    print(f"Quarters after cleaning: {list(quarterly_dict.keys())}")
+    #print(f"Quarters after cleaning: {list(quarterly_dict.keys())}")
 
     # ── Pick latest quarter as primary ────────────────────────────────────────
     sorted_keys = list(quarterly_dict.keys())
-    print(f"Sorted quarters: {sorted_keys}")
+    #print(f"Sorted quarters: {sorted_keys}")
     latest_key  = sorted_keys[-1]
     df          = quarterly_dict[latest_key]   # already prepped
 

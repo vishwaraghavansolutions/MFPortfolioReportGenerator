@@ -154,7 +154,7 @@ class GCSStorage(StorageAdapter):
     def write_csv(self, df: pd.DataFrame, bucket: str, path: str,
                   versioned: bool = False, overwrite: bool = False, **kwargs):
 
-        print(f"Writing CSV to gs://{bucket}/{path}")
+        #print(f"Writing CSV to gs://{bucket}/{path}")
 
         if versioned:
             path = self._versioned_path(path)

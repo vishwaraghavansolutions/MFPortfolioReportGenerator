@@ -200,6 +200,7 @@ with st.sidebar:
                         f"{m['num_funds']} funds · "
                         f"{len(m['amc_concentration'])} AMCs"
                     )
+                    step2_done = m is not None and len(m) > 0 # mark step 2 done only after metrics are calculated
 
         if step2_done and _ss("metrics"):
             m = _ss("metrics")
