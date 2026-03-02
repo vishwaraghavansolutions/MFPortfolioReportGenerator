@@ -5,3 +5,4 @@ numpy
 matplotlib
 anthropic   
 pdfplumber
+google-cloud-storage
