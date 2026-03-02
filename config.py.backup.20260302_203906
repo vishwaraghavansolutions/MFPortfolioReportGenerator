@@ -52,6 +52,64 @@ MODEL_ALLOCATIONS = {
 }
 
 # ============================================================
+# BENCHMARK DATA
+# ============================================================
+
+# Category benchmark mappings
+CATEGORY_BENCHMARKS = {
+    "Large Cap": {
+        "name": "Nifty 50 TRI",
+        "5y_cagr": 12.45
+    },
+    "Mid Cap": {
+        "name": "Nifty Midcap 100 TRI",
+        "5y_cagr": 17.35
+    },
+    "Small Cap": {
+        "name": "Nifty Smallcap 100 TRI",
+        "5y_cagr": 15.2
+    },
+    "Flexi Cap": {
+        "name": "Nifty 500 TRI",
+        "5y_cagr": 12.45
+    },
+    "Large & Mid Cap": {
+        "name": "Nifty 500 TRI",
+        "5y_cagr": 12.45
+    },
+    "Balanced Advantage": {
+        "name": "CRISIL Hybrid 35+65 Aggressive Index",
+        "5y_cagr": 10.5,
+        "3y_cagr": 11.2,
+        "1y_return": 8.5
+    },
+    "Equity Hybrid": {
+        "name": "CRISIL Hybrid 35+65 Aggressive Index",
+        "5y_cagr": 10.5,
+        "3y_cagr": 11.2,
+        "1y_return": 8.5
+    },
+    "Multi Asset": {
+        "name": "CRISIL Multi Asset Index",
+        "5y_cagr": 9.8,
+        "3y_cagr": 10.5,
+        "1y_return": 7.8
+    }
+}
+
+# Market context data
+MARKET_CONTEXT = {
+    "year": "CY 2025",
+    "indices": {
+        "Nifty 50": 10.3,
+        "Nifty 500": 6.29,
+        "Nifty Midcap 150": 5.09,
+        "Nifty Smallcap 250": -7.22
+    },
+    "narrative": "\n    Large caps outperformed smaller segments, reflecting a market that rewarded \n    earnings visibility and balance-sheet strength. The Nifty 500 TRI delivered \n    a 5-year CAGR of approximately 12.45% as of December 2025.\n    "
+}
+
+# ============================================================
 # VISUALIZATION SETTINGS
 # ============================================================
 

@@ -56,8 +56,7 @@ class PortfolioDataLoader:
     def load_for_date(self, dt: datetime, customer: Optional[str] = None):
         path = self._path_for_date(dt)
         df = self.reader.read_csv(path)
-        print(path, df.shape)
-
+ 
         if customer:
             if df.empty:
                 return df

@@ -151,16 +151,19 @@ class MFPortfolioAgent(Agent):
     name = "MFPortfolioAgent"
 
     # ── Skill map ─────────────────────────────────────────────────────────────
+    
     @property
     def skills(self) -> Dict[str, Callable]:
         return {
-            "list_customers":          self._list_customers,
-            "load_portfolio_data":     self._load_portfolio_data,
-            "calculate_metrics":       self._calculate_metrics,
-            "load_qoq_and_benchmarks": self._load_qoq_and_benchmarks,
-            "generate_ai_commentary":  self._generate_ai_commentary,
-            "generate_pdf_report":     self._generate_pdf_report,
-        }
+            "list_customers":            self._list_customers,
+            "load_portfolio_data":       self._load_portfolio_data,
+            "calculate_metrics":         self._calculate_metrics,
+            "load_qoq_and_benchmarks":   self._load_qoq_and_benchmarks,
+            "generate_ai_commentary":    self._generate_ai_commentary,
+            "generate_pdf_report":       self._generate_pdf_report,
+            "generate_quarterly_report": self._generate_quarterly_report,  # ← NEW
+        }   
+    
     def get_skills(self) -> Dict[str, Callable]:
         return self.skills
 
@@ -705,10 +708,10 @@ class MFPortfolioAgent(Agent):
         }
 
         # ── Generate PDF ──────────────────────────────────────────────────────
-        filename = (
-            f"portfolio_report_{selected_customer.replace(' ', '_')}"
-            f"_{datetime.now().strftime('%Y%m%d')}.pdf"
-        )
+        filename = (f"{datetime.now().strftime('%Y%m%d')}__{selected_customer.replace(' ', '')}_portfolio_report.pdf")
+        # ── Normalise output_dir to an absolute, OS-native path ──────────────────
+        output_dir  = os.path.normpath(os.path.abspath(output_dir or "."))
+        os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, filename)
 
         try:
@@ -737,5 +740,157 @@ class MFPortfolioAgent(Agent):
                 "data_warnings":  _warnings,
                 "qoq_rows":       len(quarterly_returns),
                 "trend_quarters": len(portfolio_trend),
+            },
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Skill 7 — generate_quarterly_report   (orchestrator skill)
+    # ──────────────────────────────────────────────────────────────────────────────
+    def _generate_quarterly_report(self, params: Dict[str, Any]) -> AgentResponse:
+        """
+        End-to-end orchestrator: given only a customer name, runs every pipeline
+        skill in sequence and returns the finished PDF.
+
+        Required params
+        ---------------
+        customer_name   : str   – exact name matching the c_name column in the CSV
+
+        Optional params (forwarded to underlying skills)
+        ------------------------------------------------
+        csv_path        : str       default "data/Datawarehouse_MutualFunds_2026_01_01_mutualfunds.csv"
+        bucket_name     : str       GCS bucket for QoQ parquets (default "winrich")
+        parquet_dir     : str       local dir with index_dashboard parquets (default "data")
+        as_of_date      : datetime
+        model_allocation: dict      {Equity: %, Hybrid: %, Debt: %}
+        company_name    : str       default "Winrich Professional Services"
+        output_dir      : str       directory to write the PDF (default ".")
+        skip_commentary : bool      skip AI commentary for faster runs (default False)
+
+        Output keys
+        -----------
+        pdf_path  : str   – absolute path of the generated PDF
+        filename  : str   – basename of the PDF file
+
+        AgentStatus
+        -----------
+        SUCCESS  – PDF generated (commentary errors are non-fatal)
+        RETRY    – recoverable step failed (QoQ fetch, benchmarks)
+        FAILED   – hard failure (CSV missing, customer not found, PDF crash)
+        """
+        customer_name = params.get("customer_name") or params.get("selected_customer")
+        if not customer_name:
+            return AgentResponse(
+                AgentStatus.FAILED,
+                error="'customer_name' is required in params",
+            )
+
+        # Common defaults forwarded to every sub-skill
+        base = {
+            "csv_path":     params.get("csv_path",     "data/Datawarehouse_MutualFunds_2026_01_01_mutualfunds.csv"),
+            "bucket_name":  params.get("bucket_name",  "winrich"),
+            "parquet_dir":  params.get("parquet_dir",  "data"),
+            "as_of_date":   params.get("as_of_date",   datetime.now()),
+            "company_name": params.get("company_name", "Winrich Professional Services"),
+            "output_dir":   params.get("output_dir",   "."),
+        }
+
+        # ── Step 1: load & filter portfolio data ──────────────────────────────────
+        r1 = self._load_portfolio_data({**base, "customer_name": customer_name})
+        if r1.status == AgentStatus.FAILED:
+            return AgentResponse(
+                AgentStatus.FAILED,
+                error=f"[load_portfolio_data] {r1.error}",
+                metadata=r1.metadata,
+            )
+        customer_df       = r1.output["customer_df"]
+        selected_customer = r1.output["selected_customer"]
+
+        # ── Step 2: calculate allocation & fund metrics ────────────────────────────
+        r2 = self._calculate_metrics({"customer_df": customer_df})
+        if r2.status == AgentStatus.FAILED:
+            return AgentResponse(AgentStatus.FAILED, error=f"[calculate_metrics] {r2.error}")
+        metrics = r2.output["metrics"]
+
+        # ── Step 3: fetch QoQ data + benchmarks + portfolio trend ─────────────────
+        r3 = self._load_qoq_and_benchmarks({
+            **base,
+            "customer_name": selected_customer,
+            "equity_funds":  metrics["equity_funds"],
+        })
+        if r3.status == AgentStatus.FAILED:
+            return AgentResponse(
+                AgentStatus.FAILED,
+                error=f"[load_qoq_and_benchmarks] {r3.error}",
+                metadata=r3.metadata,
+            )
+
+        # RETRY is tolerated — surface in metadata but continue to PDF
+        qoq_warning       = r3.error if r3.status == AgentStatus.RETRY else None
+        quarterly_returns = r3.output.get("quarterly_returns", [])
+        quarter_labels    = r3.output.get("quarter_labels",    [])
+        blended_return    = r3.output.get("blended_return",    {})
+        portfolio_trend   = r3.output.get("portfolio_trend",   [])
+
+        # ── Step 4: AI commentary (optional / non-fatal) ──────────────────────────
+        commentary         = []
+        commentary_warning = None
+
+        if not params.get("skip_commentary", False):
+            r4 = self._generate_ai_commentary({
+                "portfolio_data": {
+                    "client_name":       selected_customer,
+                    "equity_funds":      metrics["equity_funds"],
+                    "hybrid_funds":      metrics["hybrid_funds"],
+                    "amc_concentration": metrics["amc_concentration"],
+                    "quarterly_returns": quarterly_returns,
+                    "blended_return":    blended_return,
+                    "portfolio_trend":   portfolio_trend,
+                    "client_allocation": metrics["allocation"],
+                }
+            })
+            if r4.status == AgentStatus.SUCCESS:
+                commentary = r4.output.get("commentary", [])
+            else:
+                commentary_warning = r4.error   # non-fatal; PDF proceeds without commentary
+
+        # ── Step 5: assemble & render PDF ─────────────────────────────────────────
+        r5 = self._generate_pdf_report({
+            **base,
+            "customer_df":       customer_df,
+            "metrics":           metrics,
+            "selected_customer": selected_customer,
+            "quarterly_returns": quarterly_returns,
+            "quarter_labels":    quarter_labels,
+            "blended_return":    blended_return,
+            "portfolio_trend":   portfolio_trend,
+            "commentary":        commentary,
+            "model_allocation":  params.get("model_allocation", {}),
+        })
+
+        if r5.status == AgentStatus.FAILED:
+            return AgentResponse(
+                AgentStatus.FAILED,
+                error=f"[generate_pdf_report] {r5.error}",
+                metadata=r5.metadata,
+            )
+
+        warnings = [w for w in [qoq_warning, commentary_warning] if w]
+
+        return AgentResponse(
+            AgentStatus.SUCCESS,
+            output={
+                "pdf_path": r5.output["pdf_path"],
+                "filename": r5.output["filename"],
+            },
+            metadata={
+                **r5.metadata,
+                "steps_completed": [
+                    "load_portfolio_data",
+                    "calculate_metrics",
+                    "load_qoq_and_benchmarks",
+                    *([] if params.get("skip_commentary") else ["generate_ai_commentary"]),
+                    "generate_pdf_report",
+                ],
+                "warnings": warnings,
             },
         )

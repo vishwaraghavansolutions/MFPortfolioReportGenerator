@@ -1,0 +1,26 @@
+{
+  "succeeded": [],
+  "pdf_done": {
+    "A Balamurugan": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\portfolio_report_A_Balamurugan_20260302.pdf",
+    "Aathish Chinnakonda Sathish Kumar": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260302__AathishChinnakondaSathishKumar_portfolio_report.pdf",
+    "Aashee Varma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260302__AasheeVarma_portfolio_report.pdf",
+    "Abhilekh Verma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260302__AbhilekhVerma_portfolio_report.pdf",
+    "Abhinav Kapoor": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260302__AbhinavKapoor_portfolio_report.pdf",
+    "Abhinav Sivakumar": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260302__AbhinavSivakumar_portfolio_report.pdf"
+  },
+  "gcs_done": {
+    "A Balamurugan": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/a_balamurugan/portfolio_report_A_Balamurugan_20260302.pdf",
+    "Abhilekh Verma": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhilekh_verma/20260302__AbhilekhVerma_portfolio_report.pdf",
+    "Aathish Chinnakonda Sathish Kumar": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/aathish_chinnakonda_sathish_kumar/20260302__AathishChinnakondaSathishKumar_portfolio_report.pdf",
+    "Abhinav Sivakumar": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhinav_sivakumar/20260302__AbhinavSivakumar_portfolio_report.pdf",
+    "Abhinav Kapoor": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhinav_kapoor/20260302__AbhinavKapoor_portfolio_report.pdf",
+    "Aashee Varma": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/aashee_varma/20260302__AasheeVarma_portfolio_report.pdf"
+  },
+  "failed": {
+    "A Balamurugan": "SMTP_USER environment variable is not set",
+    "Aathish Chinnakonda Sathish Kumar": "SMTP_USER environment variable is not set"
+  },
+  "skipped": {},
+  "started_at": "2026-03-02T16:18:41.150891+00:00",
+  "updated_at": "2026-03-02T16:31:07.472119+00:00"
+}
