@@ -37,7 +37,6 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(threadName)s: %(message)s")
 
 
-
 # ── Default GCS coordinates ────────────────────────────────────────────────────
 _DEFAULT_BUCKET = "winrich_customer_reports"
 _DEFAULT_PREFIX = "Quarterly/mf_portfolio_reports"

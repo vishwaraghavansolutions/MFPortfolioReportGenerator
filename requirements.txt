@@ -5,4 +5,5 @@ numpy
 matplotlib
 anthropic   
 pdfplumber
-google-cloud
+google-cloud-storage
+sendgrid
