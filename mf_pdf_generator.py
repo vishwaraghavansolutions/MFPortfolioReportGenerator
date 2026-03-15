@@ -379,6 +379,8 @@ def generate_ai_commentary(portfolio_data):
     except ImportError:
         raise ImportError("Run: pip install anthropic")
     client  = anthropic.Anthropic()
+    print("Generating AI commentary with Anthropic API...")
+    print(portfolio_data)
     message = client.messages.create(
         model="claude-sonnet-4-20250514", max_tokens=1800,
         messages=[{"role":"user","content":_build_commentary_prompt(portfolio_data)}],

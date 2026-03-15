@@ -196,6 +196,20 @@ h1 { font-weight: 700; color: #e6edf3; }
     font-size: 0.75rem !important;
     color: #8b949e !important;
 }
+
+/* ── Portfolio filter highlight ── */
+.portfolio-filter-box {
+    background: #1a2332;
+    border: 1px solid #388bfd44;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+}
+.filter-stat {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    color: #58a6ff;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -252,6 +266,29 @@ def _default_checkpoint_path() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Portfolio value helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Candidate column names for "current portfolio value" — add more as needed
+
+def _cr(val: float) -> float:
+    """Convert raw rupee value to Crores."""
+    return val / 1e7
+
+
+def _from_cr(cr: float) -> float:
+    """Convert Crores back to raw rupee value."""
+    return cr * 1e7
+
+
+
+
+def _from_cr(cr: float) -> float:
+    """Convert Crores back to raw rupee value."""
+    return cr * 1e7
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Campaign runner (runs in a background thread)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -259,18 +296,6 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
     """
     Background thread that imports the orchestrator, monkey-patches the
     progress callbacks via queue messages, and drives the campaign.
-
-    We push structured dicts to log_q so the main thread can render them
-    without sharing mutable state.
-
-    Message schema
-    --------------
-    { "type": "log",     "level": "ok|err|warn|info", "text": str }
-    { "type": "phase",   "phase": "pdf|gcs|email|done" }
-    { "type": "count",   "key": str, "delta": int }
-    { "type": "result",  "bucket": "succeeded|failed|skipped", "entry": dict }
-    { "type": "done",    "duration_s": float }
-    { "type": "error",   "text": str }
     """
     def log(text, level="info"):
         log_q.put({"type": "log", "level": level, "text": f"[{_ts()}] {text}"})
@@ -280,14 +305,12 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
 
     try:
         log("Importing orchestrator...", "info")
-        # Import here so the thread picks up the correct sys.path
         sys.path.insert(0, os.path.dirname(__file__))
         from agents.mf_portfolio_report_manager import PortfolioReportOrchestrator
         from utils.campaign_utils import CampaignCheckpoint, RateConfig
 
         orc = PortfolioReportOrchestrator()
 
-        # ── Resolve customer list ─────────────────────────────────────────────
         log("Loading customer list...", "info")
         list_res = orc.run("list_customers", {"csv_path": params.get("csv_path", "data/Datawarehouse_MutualFunds_2026_01_01_mutualfunds.csv")})
         if list_res.status.name == "FAILED":
@@ -297,9 +320,15 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         all_customers = list_res.output["all_customers"]
         selected = params.get("customer_names") or all_customers
         log(f"Found {len(all_customers)} customers — processing {len(selected)}", "ok")
+
+        # Log portfolio filter info if applied
+        pf_min = params.get("portfolio_filter_min_cr")
+        pf_max = params.get("portfolio_filter_max_cr")
+        if pf_min is not None or pf_max is not None:
+            log(f"Portfolio filter active: ≥ {pf_min} Cr — ≤ {pf_max} Cr", "info")
+
         log_q.put({"type": "count", "key": "total", "delta": len(selected)})
 
-        # ── Checkpoint ────────────────────────────────────────────────────────
         checkpoint_path = params.get("checkpoint_path", _default_checkpoint_path())
         cp = CampaignCheckpoint(checkpoint_path)
         if params.get("fresh_start", False):
@@ -314,17 +343,15 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
 
         t0 = time.monotonic()
 
-        # ═══════════════════════════════════════════════════════════════════
-        # PHASE 1 — PDF Generation
-        # ═══════════════════════════════════════════════════════════════════
         import concurrent.futures
-
         from utils.campaign_utils import TokenBucketRateLimiter, with_retry, chunk_list
         from agents.mf_portfolio_agent import MFPortfolioAgent
         from agents.gcs_storage_agent import GCSStorageAgent
         from agents.email_agent import EmailAgent
 
-        mf_agent    = MFPortfolioAgent()
+        # mf_agent is intentionally NOT created here — each _gen_pdf worker
+        # creates its own MFPortfolioAgent() to avoid thread-safety issues
+        # with the lazy-init sub-agents (WinrichMFDataAgent, IndexAgent, etc.)
         gcs_agent   = GCSStorageAgent()
         email_agent = EmailAgent()
 
@@ -344,14 +371,16 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         for name in resume_gcs + resume_email:
             phase1_results[name] = cp.pdf_done.get(name, "")
 
-        # Normalise output_dir: absolute path, OS-native separators, create if missing
         raw_output_dir = params.get("output_dir", "reports") or "reports"
         norm_output_dir = os.path.normpath(os.path.abspath(raw_output_dir))
         os.makedirs(norm_output_dir, exist_ok=True)
         log(f"PDF output dir: {norm_output_dir}", "info")
 
+        # All params forwarded to generate_quarterly_report
         shared_pdf = {k: params[k] for k in (
             "csv_path", "company_name", "skip_commentary",
+            "parquet_dir", "bucket_name", "max_lookback_days",
+            "logo_path", "risk_profile",
         ) if k in params}
         shared_pdf["output_dir"] = norm_output_dir
 
@@ -359,8 +388,12 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
             if stop_evt.is_set():
                 return name, None, "Stopped by user"
             try:
+                # Each worker gets its own agent instance — the lazy-init
+                # sub-agents (WinrichMFDataAgent, MFBenchmarkAgent, IndexAgent)
+                # are not thread-safe when shared across threads.
+                thread_agent = MFPortfolioAgent()
                 res = with_retry(
-                    lambda: mf_agent.run("generate_quarterly_report", {
+                    lambda: thread_agent.run("generate_quarterly_report", {
                         **shared_pdf, "customer_name": name,
                     }),
                     max_retries=cfg.max_retries,
@@ -459,7 +492,7 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
             return
 
         # ═══════════════════════════════════════════════════════════════════
-        # PHASE 3 — Email Delivery (batched + rate-limited)
+        # PHASE 3 — Email Delivery
         # ═══════════════════════════════════════════════════════════════════
         log_q.put({"type": "phase", "phase": "email"})
         log(f"Phase 3 — Email delivery | workers={cfg.email_workers} rate={cfg.email_rate_per_sec}/s batch={cfg.email_batch_size}", "info")
@@ -567,7 +600,6 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
 
 
 def _build_rate_config(params):
-    """Build a RateConfig from params dict without importing at module level."""
     from utils.campaign_utils import RateConfig
     preset = params.get("rate_preset", "").lower()
     if preset == "sendgrid":
@@ -585,7 +617,7 @@ def _build_rate_config(params):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Queue drainer — called on every rerun to absorb new messages
+# Queue drainer
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _drain_queue():
@@ -661,44 +693,156 @@ with st.sidebar:
     skip_email      = st.checkbox("Dry-run (no emails)",         value=False)
     fresh_start     = st.checkbox("Fresh start (ignore checkpoint)", value=False)
 
+    st.markdown('<div class="section-label" style="margin-top:18px">Report Settings</div>', unsafe_allow_html=True)
+    parquet_dir       = st.text_input("Parquet data dir",   value="data",   help="Directory containing Index_Dashboard_*.parquet and SchemeData CSV files")
+    bucket_name       = st.text_input("GCS bucket (data)",  value="winrich", help="GCS bucket for QoQ portfolio parquet files (WinrichMFDataAgent)")
+    max_lookback_days = st.slider("Max lookback days", 1, 30, 10, help="How many days back to search for the latest portfolio data file")
+    logo_path         = st.text_input("Logo path",          value="",       help="Absolute path to company logo PNG/JPG for the PDF report")
+    risk_profile      = st.text_input("Risk profile label", value="",       help="e.g. 'Moderate', 'Aggressive' — shown on the PDF")
+
+
+    # ── Customer Selection ────────────────────────────────────────────────────
     st.markdown('<div class="section-label" style="margin-top:18px">Customer Selection</div>', unsafe_allow_html=True)
 
-    # Try to load customer list for multiselect
+    # Step 1: list_customers via agent — one call, cached per csv_path
     @st.cache_data(show_spinner=False)
-    def _load_customers(path):
+    def _agent_list_customers(csv_path: str):
         try:
-            df = pd.read_csv(path, usecols=["c_name"])
-            return sorted(df["c_name"].dropna().unique().tolist())
+            import sys, os
+            sys.path.insert(0, os.path.dirname(__file__))
+            from agents.mf_portfolio_agent import MFPortfolioAgent
+            resp = MFPortfolioAgent().run("list_customers", {"csv_path": csv_path})
+            if resp.status.name == "SUCCESS":
+                return sorted(resp.output.get("all_customers", []))
+            return []
         except Exception:
             return []
 
-    all_customers = _load_customers(csv_path)
+    # Portfolio-summary loader — returns {customer_name: total_value} from GCS parquet.
+    # TTL=300s so values refresh automatically without a page reload.
+    @st.cache_data(show_spinner=False, ttl=300)
+    def _load_portfolio_summary_data() -> dict:
+        try:
+            import sys, os
+            sys.path.insert(0, os.path.dirname(__file__))
+            from agents.gcs_storage_agent import GCSStorageAgent
+            resp = GCSStorageAgent().run("load_portfolio_summary", {})
+            if resp.status.name == "SUCCESS" and resp.output.get("row_count", 0) > 0:
+                df = resp.output["dataframe"]
+                if "customer_name" in df.columns and "total_value" in df.columns:
+                    return dict(zip(df["customer_name"], df["total_value"].fillna(0)))
+            return {}
+        except Exception:
+            return {}
+
+    all_customers   = _agent_list_customers(csv_path)
     total_customers = len(all_customers)
 
-    if total_customers:
-        # Slider to pick N customers
-        n_customers = st.slider(
-            f"Number of customers to process (of {total_customers})",
-            min_value=1,
-            max_value=total_customers,
-            value=min(total_customers, 50),
-            help="Picks the first N customers alphabetically. Use multiselect below to choose specific ones.",
-        )
-        default_selection = all_customers[:n_customers]
+    if not all_customers:
+        st.warning("Could not load customer list — check CSV path.")
+        selected_customers    = []
+        pf_min_cr = pf_max_cr = 0.0
+        enable_portfolio_filter = False
+        pf_filtered_customers = []
+    else:
+        # Step 2: Load portfolio summary and apply value filter
+        summary_values = _load_portfolio_summary_data()
+        n_with_summary = sum(1 for c in all_customers if c in summary_values)
+        n_no_summary   = total_customers - n_with_summary
 
+        include_no_summary = st.checkbox(
+            "Include customers with no summary data",
+            value=True,
+            help="Customers whose report has never been generated have no portfolio-summary entry. "
+                 "Enable to process them regardless of the value filter.",
+        )
+
+        # Derive slider bounds from only the customers that are in scope
+        _candidates = (
+            list(summary_values.values())
+            if not include_no_summary
+            else list(summary_values.values())   # bounds always from known values
+        )
+        _max_known  = max(_candidates, default=0) / 1e7 if _candidates else 0
+        _slider_max = max(10.0, round(_max_known / 10 + 0.5) * 10)
+
+        # When checkbox is unchecked and no summary data exists at all, disable the slider
+        _has_summary_data = bool(summary_values)
+        if not _has_summary_data and not include_no_summary:
+            st.info("No portfolio summary data available — uncheck 'Include customers with no summary data' would result in 0 customers.")
+            pf_min_cr, pf_max_cr = 0.0, 0.0
+        else:
+            pf_min_cr, pf_max_cr = st.slider(
+                "Portfolio value range (₹ Cr)",
+                min_value=0.0,
+                max_value=float(_slider_max),
+                value=(0.0, float(_slider_max)),
+                step=0.5,
+                help="Filter to customers whose stored total_value is in this range.",
+            )
+
+        min_raw = _from_cr(pf_min_cr)
+        max_raw = _from_cr(pf_max_cr)
+
+        n_in_range = sum(
+            1 for c in all_customers
+            if c in summary_values and min_raw <= summary_values[c] <= max_raw
+        )
+
+        if summary_values:
+            pf_filtered_customers = [
+                c for c in all_customers
+                if (c in summary_values and min_raw <= summary_values[c] <= max_raw)
+                or (include_no_summary and c not in summary_values)
+            ]
+        else:
+            pf_filtered_customers = all_customers
+
+        n_filtered = len(pf_filtered_customers)
+
+        st.markdown(
+            f'<div class="portfolio-filter-box">'
+            f'<span class="filter-stat">'
+            f'▸ {total_customers} total  •  '
+            f'{n_with_summary} with summary  •  '
+            f'{n_in_range} in ₹{pf_min_cr:.1f}–{pf_max_cr:.1f} Cr  •  '
+            f'{n_no_summary} no data  →  <b>{n_filtered} to process</b>'
+            f'</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        # Step 3: Count slider — first N from the filtered list
+        if n_filtered == 0:
+            st.warning("No customers match the current filter — adjust the range or enable 'Include customers with no summary data'.")
+            n_customers = 0
+        elif n_filtered == 1:
+            st.info("1 customer matches the current filter.")
+            n_customers = 1
+        else:
+            n_customers = st.slider(
+                f"Number to process (of {n_filtered} filtered)",
+                min_value=1,
+                max_value=n_filtered,
+                value=min(n_filtered, 50),
+                help="Picks the first N customers from the portfolio-filtered list.",
+            )
+        pool_after_n = pf_filtered_customers[:n_customers]
+
+        # Step 4: Optional specific-customer multiselect
         use_multiselect = st.checkbox("Pick specific customers", value=False)
         if use_multiselect:
             selected_customers = st.multiselect(
                 "Customers",
-                options=all_customers,
-                default=default_selection[:10],
+                options=pf_filtered_customers,
+                default=pool_after_n[:10],
+                help="Overrides the count slider.",
             )
         else:
-            selected_customers = default_selection
+            selected_customers = pool_after_n
+
         st.caption(f"**{len(selected_customers)}** customers selected")
-    else:
-        selected_customers = []
-        st.warning("Could not load customer list — check CSV path")
+
+        enable_portfolio_filter = True
 
     checkpoint_path = st.text_input(
         "Checkpoint file",
@@ -711,27 +855,35 @@ with st.sidebar:
 # Build params dict from sidebar values
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Normalise output_dir at the UI layer too so the text shown to the user is accurate
 _norm_output_dir = os.path.normpath(os.path.abspath(output_dir)) if output_dir else os.path.abspath("reports")
 
 campaign_params = {
-    "csv_path":            csv_path,
-    "output_dir":          _norm_output_dir,
-    "company_name":        company,
-    "transport":           transport,
-    "rate_preset":         preset_map[rate_preset],
-    "pdf_workers":         pdf_workers,
-    "gcs_workers":         gcs_workers,
-    "email_workers":       email_workers,
-    "email_rate_per_sec":  email_rate_per_sec,
-    "email_batch_size":    email_batch_size,
-    "email_batch_pause_s": email_batch_pause,
-    "skip_commentary":     skip_commentary,
-    "skip_gcs":            skip_gcs,
-    "skip_email":          skip_email,
-    "fresh_start":         fresh_start,
-    "checkpoint_path":     checkpoint_path,
-    "customer_names":      selected_customers if selected_customers else None,
+    "csv_path":               csv_path,
+    "output_dir":             _norm_output_dir,
+    "company_name":           company,
+    "transport":              transport,
+    "rate_preset":            preset_map[rate_preset],
+    "pdf_workers":            pdf_workers,
+    "gcs_workers":            gcs_workers,
+    "email_workers":          email_workers,
+    "email_rate_per_sec":     email_rate_per_sec,
+    "email_batch_size":       email_batch_size,
+    "email_batch_pause_s":    email_batch_pause,
+    "skip_commentary":        skip_commentary,
+    "skip_gcs":               skip_gcs,
+    "skip_email":             skip_email,
+    "fresh_start":            fresh_start,
+    "checkpoint_path":        checkpoint_path,
+    "customer_names":         selected_customers if selected_customers else None,
+    # Report generation settings passed through to generate_quarterly_report
+    "parquet_dir":            parquet_dir,
+    "bucket_name":            bucket_name,
+    "max_lookback_days":      max_lookback_days,
+    "logo_path":              logo_path,
+    "risk_profile":           risk_profile,
+    # Portfolio filter metadata (informational — filtering already applied via selected_customers)
+    "portfolio_filter_min_cr": pf_min_cr if enable_portfolio_filter else None,
+    "portfolio_filter_max_cr": pf_max_cr if enable_portfolio_filter else None,
 }
 
 
@@ -741,7 +893,6 @@ campaign_params = {
 
 st.markdown("## 📊 MF Portfolio Report Campaign")
 
-# Phase indicator strip
 phase_map = {
     None:    ("—",    ""),
     "pdf":   ("Phase 1",  "phase-pdf"),
@@ -752,22 +903,29 @@ phase_map = {
 phase_label, phase_class = phase_map.get(st.session_state["phase"], ("—", ""))
 phase_html = f'<span class="phase-badge {phase_class}">{phase_label}</span>' if phase_class else ""
 
-# Running indicator
 running_html = (
     '<span class="phase-badge phase-gcs">● Running</span>'
     if st.session_state["campaign_running"]
     else '<span class="phase-badge" style="background:#161b22;color:#8b949e;border:1px solid #21262d">● Idle</span>'
 )
 
-st.markdown(f"{running_html} {phase_html}", unsafe_allow_html=True)
+# Portfolio filter badge in header
+if enable_portfolio_filter and pf_min_cr is not None:
+    pf_badge = (
+        f'<span class="phase-badge" style="background:#1a2332;color:#58a6ff;border:1px solid #388bfd44">'
+        f'₹ ≥ {pf_min_cr:.1f} Cr</span>'
+    )
+else:
+    pf_badge = ""
+
+st.markdown(f"{running_html} {phase_html} {pf_badge}", unsafe_allow_html=True)
 st.markdown("---")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 # Control buttons
 # ══════════════════════════════════════════════════════════════════════════════
 
-_drain_queue()   # absorb any messages before rendering
+_drain_queue()
 
 col_start, col_resume, col_stop, col_reset = st.columns([1.2, 1.2, 1, 1])
 
@@ -775,7 +933,6 @@ with col_start:
     can_start = not st.session_state["campaign_running"]
     st.markdown('<div class="start-btn">', unsafe_allow_html=True)
     if st.button("▶  Start Campaign", disabled=not can_start):
-        # Reset accumulators for a fresh UI run (checkpoint handles actual resume)
         st.session_state["log_lines"]   = []
         st.session_state["phase"]       = "pdf"
         st.session_state["counts"]      = {"total": len(selected_customers or all_customers),
@@ -808,7 +965,6 @@ with col_resume:
     has_checkpoint = cp_data is not None
     st.markdown('<div class="resume-btn">', unsafe_allow_html=True)
     if st.button("↺  Resume", disabled=st.session_state["campaign_running"] or not has_checkpoint):
-        # Same as Start but fresh_start=False forced
         resume_params = {**campaign_params, "fresh_start": False}
         st.session_state["log_lines"]  = []
         st.session_state["phase"]      = "pdf"
@@ -817,7 +973,6 @@ with col_resume:
         st.session_state["end_time"]   = None
         st.session_state["checkpoint_path"] = checkpoint_path
 
-        # Pre-populate counts from checkpoint
         if cp_data:
             st.session_state["counts"] = {
                 "total":     len(selected_customers or all_customers),
@@ -878,7 +1033,7 @@ if has_checkpoint and cp_data:
 # ══════════════════════════════════════════════════════════════════════════════
 
 counts = st.session_state["counts"]
-total  = counts["total"] or 1   # avoid div/zero
+total  = counts["total"] or 1
 done   = counts["succeeded"] + counts["failed"] + counts["skipped"]
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
@@ -889,11 +1044,9 @@ m4.metric("⊘ Skipped", counts["skipped"])
 m5.metric("PDF ✓",     counts["pdf_done"])
 m6.metric("GCS ✓",     counts["gcs_done"])
 
-# Overall progress bar
 progress_pct = done / max(counts["total"], 1)
 st.progress(progress_pct)
 
-# Timing
 if st.session_state["start_time"]:
     elapsed = (
         (st.session_state["end_time"] or datetime.now()) - st.session_state["start_time"]
@@ -944,7 +1097,7 @@ st.markdown('<div class="section-label">Live Log</div>', unsafe_allow_html=True)
 
 log_lines = st.session_state.get("log_lines", [])
 if log_lines:
-    log_html = "<br>".join(log_lines[-120:])   # keep last 120 lines
+    log_html = "<br>".join(log_lines[-120:])
     st.markdown(f'<div class="log-box">{log_html}</div>', unsafe_allow_html=True)
 else:
     st.markdown('<div class="log-box"><span class="log-info">Waiting for campaign to start...</span></div>',
@@ -977,7 +1130,6 @@ with tab_failed:
     if results["failed"]:
         df_f = pd.DataFrame(results["failed"])
         st.dataframe(df_f, use_container_width=True, hide_index=True)
-        # Retry failed button
         if not st.session_state["campaign_running"]:
             if st.button("↺ Retry failed customers"):
                 retry_names = [r["customer_name"] for r in results["failed"]]

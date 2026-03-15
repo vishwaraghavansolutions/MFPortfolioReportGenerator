@@ -39,14 +39,13 @@ _DEFAULT_OUT_DIR = "reports"
 # ── Session-state initialisation ──────────────────────────────────────────────
 def _init_state():
     defaults = {
-        "agent":           None,
-        "all_customers":   [],
+        "agent":            None,
+        "all_customers":    [],
         "customers_loaded": False,
-        "customer_df":     None,
-        "metrics":         None,
-        "qoq":             None,
-        "pdf_path":        None,
-        "pdf_bytes":       None,
+        "customer_df":      None,
+        "metrics":          None,
+        "pdf_path":         None,
+        "pdf_bytes":        None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -63,7 +62,6 @@ def _get_agent() -> MFPortfolioAgent:
 
 # ── GCS settings sidebar ──────────────────────────────────────────────────────
 with st.sidebar:
-    # st.image returns a DeltaGenerator — never use it in a ternary expression
     if os.path.exists("assets/winrich-logo.png"):
         st.image("assets/winrich-logo.png", width=180)
     st.title("WinRich Reports")
@@ -72,14 +70,13 @@ with st.sidebar:
     st.subheader("⚙️ Settings")
     bucket_name: str = st.text_input(
         "GCS Bucket", value=_DEFAULT_BUCKET,
-        help="GCS bucket containing the datawarehouse CSV and QoQ parquets.",
+        help="GCS bucket containing the datawarehouse CSV.",
     )
     as_of_date = st.date_input(
         "As-of Date",
         value=datetime.today(),
         help="The loader will resolve to the nearest available business day at or before this date.",
     )
-    # Cast to int — st.number_input returns float by default
     max_lookback: int = int(st.number_input(
         "Max lookback (business days)", min_value=1, max_value=30, value=10,
         step=1,
@@ -164,7 +161,6 @@ st.divider()
 if generate_clicked and selected_customer:
     agent = _get_agent()
 
-    # Common params passed to every skill
     base_params = {
         "bucket_name":       bucket_name,
         "as_of_date":        datetime(as_of_date.year, as_of_date.month, as_of_date.day),
@@ -194,76 +190,87 @@ if generate_clicked and selected_customer:
     selected_customer = r1.output["selected_customer"]
     resolved_path     = r1.output.get("resolved_path", "")
 
-    # ── Step 2: metrics ───────────────────────────────────────────────────────
-    progress.progress(25, text="📐 Calculating metrics…")
-    r2 = agent.run("calculate_metrics", {"customer_df": customer_df})
-    if r2.status == AgentStatus.FAILED:
-        st.error(f"❌ Metrics failed: {r2.error}")
-        st.stop()
-    metrics = r2.output["metrics"]
+    # ── Step 2: enrich benchmarks ─────────────────────────────────────────────
+    progress.progress(25, text="🔍 Resolving fund benchmarks…")
+    r2 = agent.run("enrich_benchmarks", {**base_params, "customer_df": customer_df})
+    if r2.status == AgentStatus.SUCCESS:
+        customer_df = r2.output["customer_df"]
+        st.write("Before enrichment:")
+        st.write(customer_df)
+    else:
+        st.warning(f"⚠️ Benchmark enrichment failed: {r2.error}")
 
-    # ── Step 3: QoQ + benchmarks ──────────────────────────────────────────────
-    progress.progress(45, text="📈 Loading QoQ data and benchmarks…")
-    r3 = agent.run("load_qoq_and_benchmarks", {
-        **base_params,
-        "customer_name": selected_customer,
-        "equity_funds":  metrics["equity_funds"],
-    })
-    if r3.status == AgentStatus.FAILED:
-        st.error(f"❌ QoQ load failed: {r3.error}")
-        st.stop()
-    if r3.status == AgentStatus.RETRY and r3.metadata.get("benchmark_error"):
-        st.warning(f"⚠️ Benchmark data issue: {r3.metadata['benchmark_error']}")
+    # ── Step 3: enrich fund ranks ─────────────────────────────────────────────
+    progress.progress(40, text="🏆 Fetching WinRich fund rankings…")
+    r3 = agent.run("enrich_fund_ranks", {"customer_df": customer_df})
+    if r3.status == AgentStatus.SUCCESS:
+        customer_df = r3.output["customer_df"]
+    else:
+        st.warning(f"⚠️ Fund ranking failed: {r3.error}")
 
-    # ── Step 4: AI commentary ─────────────────────────────────────────────────
+
+    st.write("After enrichment:")
+    st.write(customer_df)
+    # ── Step 4: calculate metrics ─────────────────────────────────────────────
+    progress.progress(55, text="📐 Calculating metrics…")
+    r4 = agent.run("calculate_metrics", {"customer_df": customer_df})
+    if r4.status == AgentStatus.FAILED:
+        st.error(f"❌ Metrics failed: {r4.error}")
+        st.stop()
+    metrics = r4.output["metrics"]
+
+    # ── Step 5: AI commentary ─────────────────────────────────────────────────
     commentary = []
     if not skip_commentary:
-        progress.progress(65, text="🤖 Generating AI commentary…")
-        r4 = agent.run("generate_ai_commentary", {
+        progress.progress(70, text="🤖 Generating AI commentary…")
+        r5_com = agent.run("generate_ai_commentary", {
             "portfolio_data": {
                 "client_name":       selected_customer,
                 "equity_funds":      metrics["equity_funds"],
                 "hybrid_funds":      metrics["hybrid_funds"],
                 "amc_concentration": metrics["amc_concentration"],
-                "quarterly_returns": r3.output.get("quarterly_returns", []),
-                "blended_return":    r3.output.get("blended_return", {}),
-                "portfolio_trend":   r3.output.get("portfolio_trend", []),
                 "client_allocation": metrics["allocation"],
             }
         })
-        if r4.status == AgentStatus.SUCCESS:
-            commentary = r4.output.get("commentary", [])
+        if r5_com.status == AgentStatus.SUCCESS:
+            commentary = r5_com.output.get("commentary", [])
         else:
-            st.warning(f"⚠️ Commentary skipped: {r4.error}")
+            st.warning(f"⚠️ Commentary skipped: {r5_com.error}")
 
-    # ── Step 5: generate PDF ──────────────────────────────────────────────────
-    progress.progress(80, text="📄 Rendering PDF…")
-    r5 = agent.run("generate_pdf_report", {
+    # ── Step 5b: store portfolio summary (metrics + commentary) ───────────────
+    progress.progress(78, text="💾 Storing portfolio summary…")
+    r5b = agent.run("store_portfolio_summary", {
+        "customer_name": selected_customer,
+        "metrics":       metrics,
+        "commentary":    commentary,
+        "as_of_date":    str(as_of_date),
+    })
+    if r5b.status != AgentStatus.SUCCESS:
+        st.warning(f"⚠️ Portfolio summary not stored: {r5b.error}")
+
+    # ── Step 6: generate PDF ──────────────────────────────────────────────────
+    progress.progress(85, text="📄 Rendering PDF…")
+    r6 = agent.run("generate_pdf_report", {
         **base_params,
         "customer_df":       customer_df,
         "metrics":           metrics,
         "selected_customer": selected_customer,
         "resolved_path":     resolved_path,
-        "quarterly_returns": r3.output.get("quarterly_returns", []),
-        "quarter_labels":    r3.output.get("quarter_labels",    []),
-        "blended_return":    r3.output.get("blended_return",    {}),
-        "portfolio_trend":   r3.output.get("portfolio_trend",   []),
         "commentary":        commentary,
-        "model_allocation":  {},
     })
 
     progress.progress(100, text="✅ Done!")
     progress.empty()
 
-    if r5.status == AgentStatus.FAILED:
-        st.error(f"❌ PDF generation failed: {r5.error}")
-        if r5.metadata.get("traceback"):
+    if r6.status == AgentStatus.FAILED:
+        st.error(f"❌ PDF generation failed: {r6.error}")
+        if r6.metadata.get("traceback"):
             with st.expander("Full traceback"):
-                st.code(r5.metadata["traceback"])
+                st.code(r6.metadata["traceback"])
         st.stop()
 
     # ── Cache results ─────────────────────────────────────────────────────────
-    pdf_path = r5.output["pdf_path"]
+    pdf_path = r6.output["pdf_path"]
     st.session_state.pdf_path = pdf_path
     try:
         with open(pdf_path, "rb") as f:
@@ -273,21 +280,14 @@ if generate_clicked and selected_customer:
 
     st.session_state.customer_df = customer_df
     st.session_state.metrics     = metrics
-    st.session_state.qoq         = r3.output
-
-    # Surface any non-fatal warnings
-    for w in r5.metadata.get("data_warnings", []):
-        st.warning(f"⚠️ {w}")
 
 
 # ── Results panel (shown after generation) ────────────────────────────────────
 if st.session_state.pdf_path:
     metrics = st.session_state.metrics
-    qoq     = st.session_state.qoq or {}
 
     st.success(f"✅ Report ready — `{os.path.basename(st.session_state.pdf_path)}`")
 
-    # Download button
     if st.session_state.pdf_bytes:
         st.download_button(
             label="⬇️ Download PDF",
@@ -304,13 +304,13 @@ if st.session_state.pdf_path:
         total = metrics["total_value"]
         alloc = metrics["allocation"]
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Portfolio Value",   f"Rs. {total:,.0f}")
-        c2.metric("Equity",            f"{alloc['Equity']:.1f}%")
-        c3.metric("Hybrid",            f"{alloc['Hybrid']:.1f}%")
-        c4.metric("Debt",              f"{alloc['Debt']:.1f}%")
+        c1.metric("Portfolio Value", f"Rs. {total:,.0f}")
+        c2.metric("Equity",          f"{alloc['Equity']:.1f}%")
+        c3.metric("Hybrid",          f"{alloc['Hybrid']:.1f}%")
+        c4.metric("Debt",            f"{alloc['Debt']:.1f}%")
 
     # ── Fund tables ───────────────────────────────────────────────────────────
-    tabs = st.tabs(["Equity Funds", "Hybrid Funds", "QoQ Returns", "Debug"])
+    tabs = st.tabs(["Equity Funds", "Hybrid Funds", "Debug"])
 
     with tabs[0]:
         eq = metrics.get("equity_funds", []) if metrics else []
@@ -332,26 +332,8 @@ if st.session_state.pdf_path:
             st.info("No hybrid funds found.")
 
     with tabs[2]:
-        qrows  = qoq.get("quarterly_returns", [])
-        qlabels = qoq.get("quarter_labels", [])
-        if qrows and qlabels:
-            import pandas as pd
-            records = []
-            for row in qrows:
-                r = {"Fund": row["name"], "Is Benchmark": row.get("is_benchmark", False)}
-                for i, lbl in enumerate(qlabels):
-                    r[lbl] = row["returns"].get(f"q{i}")
-                r["TTM"] = row["returns"].get("ttm")
-                records.append(r)
-            st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
-        else:
-            st.info("No QoQ data available.")
-
-    with tabs[3]:
         st.json({
-            "pdf_path":       st.session_state.pdf_path,
-            "num_equity":     len(metrics.get("equity_funds", [])) if metrics else 0,
-            "num_hybrid":     len(metrics.get("hybrid_funds", [])) if metrics else 0,
-            "quarters":       qoq.get("quarter_labels", []),
-            "trend_quarters": len(qoq.get("portfolio_trend", [])),
+            "pdf_path":   st.session_state.pdf_path,
+            "num_equity": len(metrics.get("equity_funds", [])) if metrics else 0,
+            "num_hybrid": len(metrics.get("hybrid_funds", [])) if metrics else 0,
         })

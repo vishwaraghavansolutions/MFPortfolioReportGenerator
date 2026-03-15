@@ -2,97 +2,14 @@
 mf_portfolio_pdf_generator.py
 ------------------------------
 WinRich Professional Services — Portfolio Performance Report Generator
-Matches the WinRich sample format (Client Portfolio Performance Report style).
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-USAGE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    from utils.mf_portfolio_pdf_generator import MFPortfolioPDFGenerator
-
-    gen = MFPortfolioPDFGenerator()
-    gen.generate_report(portfolio_data, "output.pdf")
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-portfolio_data  —  COMPLETE KEY REFERENCE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ── Header / Meta ──────────────────────────────────────────────────
-  company_name        : str    optional  default "WinRich Professional Services"
-  logo_path           : str    optional  e.g. "assets/winrich-logo.png"
-  client_name         : str
-  report_date         : str    e.g. "March 04, 2026"
-  investment_start    : str    optional  e.g. "November 16, 2023"
-  prepared_by         : str    optional  e.g. "WinRich Research Desk"
-  risk_profile        : str    optional  e.g. "Balanced"   — shown in header pill
-  data_as_on          : str    optional  e.g. "04-Mar-2026"  — shown in header pill
-  n_funds             : int    — shown in header pill
-  n_amcs              : int    — shown in header pill
-  website             : str    optional  shown in footer
-  email               : str    optional  shown in footer
-
-  NOTE: reference_benchmark is kept for compatibility but NOT shown in the
-  header pills. Use it only for AI commentary context if needed.
-
-  ── Section 1 — Portfolio Snapshot ─────────────────────────────────
-  total_current_value : float
-  total_invested      : float
-  total_gain          : float
-  portfolio_xirr      : float   annualised return since first investment
-  allocation_rows     : list[dict]
-      Each dict: {
-          asset_class       : str   e.g. "Equity"
-          your_allocation   : str   e.g. "75.88%"
-          funds_in_portfolio: str   pipe-separated fund names
-      }
-
-  ── Section 2 — Fund Performance vs Benchmark ──────────────────────
-  all_funds           : list[dict]
-      Each dict: {
-          name              : str   full fund name (suffixes auto-stripped)
-          benchmark_index   : str   e.g. "Nifty 500 TRI"
-          winrich_rank      : str   e.g. "7 / 39"  or "No Rank"
-          xirr              : float your annualised return from investment date
-          benchmark_xirr    : float benchmark index return since fund inception
-      }
-      Columns displayed: Fund Name | Benchmark Index | WinRich Rank
-                         | Your XIRR | Benchmark XIRR (Since Inception)
-
-  ── Section 2a — Fund-wise Gains ───────────────────────────────────
-  fund_gains          : list[dict]
-      Each dict: {
-          name              : str
-          folio_start_date  : str or datetime  e.g. "16-Nov-2023"
-                              also accepted as key FolioStartDate
-          amount_invested   : float
-          current_value     : float
-          gain              : float
-          abs_return        : float  absolute % return (no time adjustment)
-          xirr              : float  annualised return since folio start
-      }
-
-  ── Section 3 — AMC Concentration ──────────────────────────────────
-  amc_concentration   : dict
-      Preferred format: { amc_name: {'value': float, 'pct': float} }
-      Legacy format:    { amc_name: int }  (count of funds)
-
-  ── QoQ Sections (optional — skipped if absent) ────────────────────
-  quarter_labels      : list[str]   sorted oldest → newest
-                        e.g. ["Q2 FY25 (Jul-Sep '24)", "Q3 FY25 (Oct-Dec '24)"]
-  quarterly_returns   : list[dict]
-      Each dict: {
-          name         : str
-          is_benchmark : bool
-          returns      : dict  { q0: float, q1: float, ..., qN: float, ttm: float }
-      }
-  blended_return      : dict  { q0: float, ..., qN: float, ttm: float }
-
-  ── AI Commentary (optional) ───────────────────────────────────────
-  commentary          : list[dict]  { heading: str, body: str }
-                        If absent, call generate_ai_commentary(portfolio_data)
-                        to auto-generate via Claude API (needs ANTHROPIC_API_KEY)
-
-  ── Misc ───────────────────────────────────────────────────────────
-  disclaimer          : str    optional  overrides default disclaimer text
+CHANGES (this version)
+-----------------------
+Fix 1  Section 2  — Added Bench 3Y column (between Bench 1Y and Bench 5Y).
+Fix 2  Section 2a — Total Portfolio row now shows value-weighted XIRR instead of "—".
+Fix 3  Section 3  — Improved AMC pie chart readability: distinct colour palette,
+                     coloured % labels, cleaner legend with Rs. value on second line,
+                     dynamic chart height based on number of AMCs.
 """
 
 from __future__ import annotations
@@ -130,24 +47,18 @@ def _reg(name, path):
     except Exception:
         return False
 
-# Poppins — headings, section titles, KPIs, table headers
 _reg('Poppins',           f'{_FONT_DIR_GOOGLE}/Poppins-Regular.ttf')
 _reg('Poppins-Bold',      f'{_FONT_DIR_GOOGLE}/Poppins-Bold.ttf')
 _reg('Poppins-Medium',    f'{_FONT_DIR_GOOGLE}/Poppins-Medium.ttf')
 _reg('Poppins-Light',     f'{_FONT_DIR_GOOGLE}/Poppins-Light.ttf')
 _reg('Poppins-Italic',    f'{_FONT_DIR_GOOGLE}/Poppins-Italic.ttf')
-
-# Liberation Sans — body text (metric-compatible with Arial)
 _reg('LibSans',           f'{_FONT_DIR_LIBSANS}/LiberationSans-Regular.ttf')
 _reg('LibSans-Bold',      f'{_FONT_DIR_LIBSANS}/LiberationSans-Bold.ttf')
 _reg('LibSans-Italic',    f'{_FONT_DIR_LIBSANS}/LiberationSans-Italic.ttf')
 _reg('LibSans-BoldItalic',f'{_FONT_DIR_LIBSANS}/LiberationSans-BoldItalic.ttf')
-
-# DejaVuSans — rupee symbol ₹ and other unicode glyphs
 _reg('DejaVu',            f'{_FONT_DIR_DEJAVU}/DejaVuSans.ttf')
 _reg('DejaVu-Bold',       f'{_FONT_DIR_DEJAVU}/DejaVuSans-Bold.ttf')
 
-# Resolved font names (fallback to Helvetica if registration failed)
 def _font(preferred, fallback='Helvetica'):
     try:
         pdfmetrics.getFont(preferred)
@@ -155,13 +66,13 @@ def _font(preferred, fallback='Helvetica'):
     except Exception:
         return fallback
 
-F_HEAD   = _font('Poppins-Bold')       # section headings, KPI values
-F_HEAD_M = _font('Poppins-Medium')     # table headers, sub-headings
-F_BODY   = _font('LibSans')            # body / cell text
-F_BODY_B = _font('LibSans-Bold')       # bold body
-F_BODY_I = _font('LibSans-Italic')     # italic body
-F_SMALL  = _font('Poppins-Light')      # footnotes, small labels
-RS = 'Rs.'        # Use text prefix — avoids glyph box in LibSans/Poppins
+F_HEAD   = _font('Poppins-Bold')
+F_HEAD_M = _font('Poppins-Medium')
+F_BODY   = _font('LibSans')
+F_BODY_B = _font('LibSans-Bold')
+F_BODY_I = _font('LibSans-Italic')
+F_SMALL  = _font('Poppins-Light')
+RS = 'Rs.'
 
 NAVY       = colors.HexColor('#1a2a5e')
 MID_BLUE   = colors.HexColor('#2e4899')
@@ -174,8 +85,7 @@ LIGHT_GREY = colors.HexColor('#f5f5f5')
 GREEN      = colors.HexColor('#1a7a1a')
 RED        = colors.HexColor('#cc0000')
 RULE_COLOR = colors.HexColor('#c0cce8')
-# RS defined in font registration block above
-PAGE_W = 7.0   # usable content width in inches (8.5" letter - 0.75" margins x2)
+PAGE_W = 7.0
 
 
 def _mk(name, **kw): return ParagraphStyle(name, **kw)
@@ -271,17 +181,16 @@ class HeaderBanner(Flowable):
         c.setFillColor(NAVY); c.rect(0,0,w,h,fill=1,stroke=0)
         c.setFillColor(MID_BLUE); c.rect(0,0,w,3,fill=1,stroke=0)
 
-        # ── Logo: resolve path against multiple base dirs ───────────────────
         logo_resolved = None
         if self.logo_path:
             _here = os.path.dirname(os.path.abspath(__file__))
             _cwd  = os.getcwd()
             candidates = [
-                self.logo_path,                                        # absolute or already correct
-                os.path.join(_cwd, self.logo_path),                    # relative to cwd (app root)
-                os.path.join(os.path.dirname(_cwd), self.logo_path),  # one level up from cwd
-                os.path.join(_here, self.logo_path),                   # relative to this file
-                os.path.join(_here, '..', self.logo_path),            # one level up from this file
+                self.logo_path,
+                os.path.join(_cwd, self.logo_path),
+                os.path.join(os.path.dirname(_cwd), self.logo_path),
+                os.path.join(_here, self.logo_path),
+                os.path.join(_here, '..', self.logo_path),
             ]
             for candidate in candidates:
                 candidate = os.path.normpath(candidate)
@@ -293,7 +202,6 @@ class HeaderBanner(Flowable):
             try:
                 lh = 0.45 * inch
                 lw = 1.6  * inch
-                # Draw logo top-RIGHT to avoid overlapping the text block
                 c.drawImage(logo_resolved, w - lw - 10, h - lh - 8,
                             width=lw, height=lh,
                             preserveAspectRatio=True, mask='auto')
@@ -307,7 +215,6 @@ class HeaderBanner(Flowable):
                 "Logo not found. Tried paths relative to: cwd=%s file=%s logo_path=%s",
                 os.getcwd(), os.path.abspath(__file__), self.logo_path)
 
-        # ── Text block: left side only (logo occupies right ~1.7") ──────────
         tx = 12
         c.setFont(F_HEAD, 8)
         c.setFillColor(colors.HexColor('#a0b8e8'))
@@ -332,7 +239,6 @@ class HeaderBanner(Flowable):
         for line in meta:
             c.drawString(tx, y, line); y -= 11
 
-        # ── Pills row: full-width strip at the bottom of the banner ─────────
         pills = [(k, v) for k, v in [
             ("Risk Profile", self.risk_profile),
             ("No. of Funds", str(self.n_funds) if self.n_funds else ''),
@@ -342,26 +248,21 @@ class HeaderBanner(Flowable):
 
         if pills:
             row_h = 0.40 * inch
-            # White background strip
             c.setFillColor(WHITE)
             c.rect(0, 0, w, row_h, fill=1, stroke=0)
-            # Top border line separating pills from navy banner
             c.setStrokeColor(RULE_COLOR)
             c.setLineWidth(0.8)
             c.line(0, row_h, w, row_h)
             cell_w = w / len(pills)
             for i, (lbl, val) in enumerate(pills):
                 cx = i * cell_w + cell_w / 2
-                # Vertical divider between cells
                 if i > 0:
                     c.setStrokeColor(RULE_COLOR)
                     c.setLineWidth(0.5)
                     c.line(i * cell_w, 4, i * cell_w, row_h - 4)
-                # Label — small, grey
                 c.setFont(F_SMALL, 6.5)
                 c.setFillColor(colors.HexColor('#888888'))
                 c.drawCentredString(cx, row_h - 13, lbl)
-                # Value — bold, navy/black
                 val_display = val if len(val) <= 22 else val[:21] + '…'
                 c.setFont(F_HEAD_M, 8)
                 c.setFillColor(colors.HexColor('#1a2a5e'))
@@ -381,37 +282,124 @@ def _draw_footer(canvas, doc, company, website='', email=''):
     canvas.restoreState()
 
 
-def _build_commentary_prompt(portfolio_data):
-    """Build the AI prompt from the current portfolio_data schema."""
+import math as _math
+
+def _safe_float(v):
+    if v is None:
+        return None
+    try:
+        f = float(v)
+        return None if (_math.isnan(f) or _math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_commentary_prompt(portfolio_data: dict) -> str:
     d = portfolio_data
-    # Portfolio summary line
-    xirr_str = f"{float(d['portfolio_xirr']):.2f}%" if d.get('portfolio_xirr') else 'N/A'
-    header = (
-        f"Client: {d.get('client_name','N/A')} | Report Date: {d.get('report_date','N/A')}\n"
-        f"Invested: {_fmt_inr(d.get('total_invested',0))} | "
-        f"Current Value: {_fmt_inr(d.get('total_current_value',0))} | "
-        f"Gain: {_fmt_inr(d.get('total_gain',0))} | "
-        f"Portfolio XIRR: {xirr_str} | "
-        f"Investment Start: {d.get('investment_start','N/A')}"
+
+    total_cur  = _safe_float(d.get("total_current_value"))
+    total_inv  = _safe_float(d.get("total_invested"))
+    total_gain = _safe_float(d.get("total_gain"))
+    port_xirr  = _safe_float(d.get("portfolio_xirr"))
+
+    if (total_cur is None or total_cur == 0) and d.get("fund_gains"):
+        total_cur  = sum(_safe_float(f.get("current_value"))   or 0 for f in d["fund_gains"])
+        total_inv  = sum(_safe_float(f.get("amount_invested")) or 0 for f in d["fund_gains"])
+        total_gain = (total_cur - total_inv) if total_cur and total_inv else None
+
+    has_fund_data = bool(
+        d.get("all_funds") or d.get("fund_gains") or
+        d.get("equity_funds") or d.get("hybrid_funds")
     )
-    # Fund data — xirr and benchmark_xirr are the only return columns now
+    if not has_fund_data:
+        raise ValueError(
+            f"_build_commentary_prompt: no fund data found. Keys: {list(d.keys())}"
+        )
+
+    total_cur  = total_cur  or 0.0
+    total_inv  = total_inv  or 0.0
+    total_gain = total_gain if total_gain is not None else (total_cur - total_inv)
+    xirr_str   = f"{port_xirr:.2f}%" if port_xirr is not None else "N/A"
+
+    header = (
+        f"Client: {d.get('client_name', 'N/A')} | "
+        f"Report Date: {d.get('report_date', 'N/A')}\n"
+        f"Investment Start: {d.get('investment_start', 'N/A')} | "
+        f"Invested: Rs.{total_inv:,.0f} | "
+        f"Current Value: Rs.{total_cur:,.0f} | "
+        f"Gain: Rs.{total_gain:,.0f} | "
+        f"Portfolio XIRR: {xirr_str} | "
+        f"Funds: {d.get('n_funds', '?')} across {d.get('n_amcs', '?')} AMCs"
+    )
+
+    funds_source = list(d.get("all_funds") or [])
+
+    if not funds_source:
+        for f in (d.get("equity_funds") or []) + (d.get("hybrid_funds") or []):
+            funds_source.append({
+                "name":                 f.get("name", "—"),
+                "xirr":                 _safe_float(f.get("xirr")),
+                "benchmark_index":      f.get("benchmark_index") or "",
+                "benchmark_xirr":       _safe_float(f.get("benchmark_xirr") or f.get("benchmark")),
+                "benchmark_return_1yr": _safe_float(f.get("benchmark_return_1yr")),
+                "benchmark_return_3yr": _safe_float(f.get("benchmark_return_3yr")),
+                "benchmark_return_5yr": _safe_float(f.get("benchmark_return_5yr")),
+                "winrich_rank":         f.get("winrich_rank", "N/A"),
+            })
+
+    if not funds_source:
+        for fg in (d.get("fund_gains") or []):
+            funds_source.append({
+                "name":  fg.get("name", "—"),
+                "xirr":  _safe_float(fg.get("xirr")),
+                "benchmark_index": "", "benchmark_xirr": None,
+                "benchmark_return_1yr": None, "benchmark_return_3yr": None,
+                "benchmark_return_5yr": None, "winrich_rank": "N/A",
+            })
+
     fund_lines = []
-    for f in d.get('all_funds', []):
-        bx = f.get('benchmark_xirr')
-        bx_str = f"{float(bx):.2f}%" if bx is not None else 'N/A'
-        fx = f.get('xirr')
-        fx_str = f"{float(fx):.2f}%" if fx is not None else 'N/A'
+    for f in funds_source:
+        fx     = _safe_float(f.get("xirr"))
+        fx_str = f"{fx:.2f}%" if fx is not None else "N/A"
+        b1yr   = _safe_float(f.get("benchmark_return_1yr") or f.get("benchmark_xirr"))
+        b3yr   = _safe_float(f.get("benchmark_return_3yr"))
+        b5yr   = _safe_float(f.get("benchmark_return_5yr"))
+        bench_details = ", ".join(filter(None, [
+            f"1Y={b1yr:.2f}%" if b1yr is not None else None,
+            f"3Y={b3yr:.2f}%" if b3yr is not None else None,
+            f"5Y={b5yr:.2f}%" if b5yr is not None else None,
+        ])) or "N/A"
+        bench_idx = f.get("benchmark_index") or "N/A"
+        rank      = f.get("winrich_rank")    or "N/A"
         fund_lines.append(
-            f"  {f.get('name','—')}: Your XIRR={fx_str} | "
-            f"Benchmark XIRR (since inception)={bx_str} | "
-            f"WinRich Rank={f.get('winrich_rank','N/A')}"
+            f"  {f.get('name', '—')}: "
+            f"Your XIRR={fx_str} | "
+            f"Benchmark ({bench_idx}) Trailing Returns: {bench_details} | "
+            f"WinRich Rank={rank}"
         )
-    # Allocation context
+
     alloc_lines = []
-    for r in d.get('allocation_rows', []):
+    for r in (d.get("allocation_rows") or []):
         alloc_lines.append(
-            f"  {r.get('asset_class','')}: {r.get('your_allocation','')} — {r.get('funds_in_portfolio','')}"
+            f"  {r.get('asset_class', '')}: "
+            f"{r.get('your_allocation', '')} — "
+            f"{r.get('funds_in_portfolio', '')}"
         )
+    if not alloc_lines:
+        for ac, pct in (d.get("client_allocation") or {}).items():
+            pct_f = _safe_float(pct)
+            if pct_f and pct_f > 0:
+                alloc_lines.append(f"  {ac}: {pct_f:.1f}%")
+
+    amc_lines = []
+    for amc, v in (d.get("amc_concentration") or {}).items():
+        if isinstance(v, dict):
+            pct = _safe_float(v.get("pct")) or 0
+            val = _safe_float(v.get("value")) or 0
+            amc_lines.append(f"  {amc}: {pct:.1f}% (Rs.{val:,.0f})")
+        else:
+            amc_lines.append(f"  {amc}")
+
     lines = [
         "You are a professional mutual fund portfolio analyst at WinRich Professional Services.",
         "Write a concise, warm portfolio performance commentary addressed directly to the client.",
@@ -423,8 +411,11 @@ def _build_commentary_prompt(portfolio_data):
         "  Your Hybrid Fund",
         "  Key Observations",
         "",
-        "Write 3-5 sentences per section. Reference actual fund names, XIRR values, benchmark XIRR values, and WinRich ranks.",
-        "Note: Benchmark XIRR is since the fund's inception date, not from client's investment date.",
+        "Write 3-5 sentences per section.",
+        "Reference actual fund names, XIRR values, benchmark index names,",
+        "and trailing benchmark returns (1Y/3Y/5Y where available).",
+        "Note: Your XIRR is the annualised return from the client's investment date.",
+        "Trailing benchmark returns (1Y/3Y/5Y) are market index returns over those calendar periods.",
         "",
         "--- Portfolio Data ---",
         header,
@@ -433,12 +424,14 @@ def _build_commentary_prompt(portfolio_data):
         *fund_lines,
         "",
         "Asset Allocation:",
-        *alloc_lines,
+        *(alloc_lines or ["  N/A"]),
+        "",
+        "AMC Concentration:",
+        *(amc_lines or ["  N/A"]),
         "",
         "Write commentary now.",
     ]
     return "\n".join(lines)
-
 
 
 def _parse_commentary(raw):
@@ -582,23 +575,24 @@ class MFPortfolioPDFGenerator:
             t.setStyle(ts); story.append(t)
         return story
 
+    # ── FIX 1: Section 2 — added Bench 3Y column ─────────────────────────────
     def _section_fund_performance(self, all_funds):
         story = [_p("2  Fund Performance vs Benchmark", 'section')]
         story.append(_p(
             "XIRR (Since Investment) is the annualised return your money has earned from your investment "
-            "date in each fund. Benchmark XIRR is what the relevant market index returned since the fund's "
-            "inception date — giving you a long-term reference for how the index itself has performed.",
+            "date in each fund. Benchmark returns are the relevant market index returns over trailing periods.",
             'footnote'))
 
-        # 6 columns: Fund Name | Benchmark Index | WinRich Rank | Your XIRR | 3M | 1Y | 5Y
-        col_w = [2.1*inch, 1.4*inch, 0.85*inch, 0.85*inch, 0.65*inch, 0.65*inch, 0.65*inch]
+        # 8 columns: Fund Name | Benchmark Index | WinRich Rank | Your XIRR | 3M | 1Y | 3Y | 5Y
+        col_w = [2.0*inch, 1.35*inch, 0.75*inch, 0.75*inch, 0.55*inch, 0.55*inch, 0.55*inch, 0.55*inch]
         hdr   = [
             _p("Fund Name",        'th_left'),
             _p("Benchmark Index",  'th_left'),
-            _p("WinRich Rank",     'th'),
-            _p("Your XIRR",        'th'),
+            _p("WinRich\nRank",    'th_sm'),
+            _p("Your\nXIRR",       'th_sm'),
             _p("Bench\n3M",        'th_sm'),
             _p("Bench\n1Y",        'th_sm'),
+            _p("Bench\n3Y",        'th_sm'),
             _p("Bench\n5Y",        'th_sm'),
         ]
         rows = [hdr]
@@ -617,25 +611,27 @@ class MFPortfolioPDFGenerator:
                 _xirr_cell(f.get('xirr')),
                 _ret(f.get('benchmark_return_3m'),  color_it=False),
                 _ret(f.get('benchmark_return_1yr'), color_it=False),
+                _ret(f.get('benchmark_return_3yr'), color_it=False),
                 _ret(f.get('benchmark_return_5yr'), color_it=False),
             ])
 
         t  = Table(rows, colWidths=col_w, repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0,0), (1,-1), 'LEFT')
-        # Shade the three benchmark return columns
-        ts.add('BACKGROUND', (4,1), (6,-1), BENCH_BG)
+        # Shade the four benchmark return columns (cols 4-7)
+        ts.add('BACKGROUND', (4,1), (7,-1), BENCH_BG)
         for cmd in _alt_rows(len(rows)): ts.add(*cmd)
         t.setStyle(ts)
         story.append(t)
         story.append(_p(
             "Your XIRR = annualised return from your investment date. "
-            "Bench 3M / 1Y / 5Y = benchmark index return over trailing 3-month, 1-year, and 5-year periods. "
+            "Bench 3M / 1Y / 3Y / 5Y = benchmark index return over trailing 3-month, 1-year, 3-year, and 5-year periods. "
             "WinRich Rank = fund's rank among category peers. "
             "Past performance is not indicative of future returns.",
             'footnote'))
         return story
 
+    # ── FIX 2: Section 2a — value-weighted XIRR in total row ─────────────────
     def _section_fund_gains(self, fund_gains):
         story = [_p("2a  Fund-wise Gains — What Your Money Has Earned", 'sub_hdr')]
         story.append(_p(
@@ -644,7 +640,6 @@ class MFPortfolioPDFGenerator:
             "Folio Start Date is when your first investment in that fund was made.",
             'footnote'))
 
-        # 7 columns — widths sum to 7.0"
         hdr = [
             _p("Fund Name",          'th_left'),
             _p("Folio Start Date",   'th'),
@@ -656,7 +651,7 @@ class MFPortfolioPDFGenerator:
         ]
         rows = [hdr]
 
-        total_inv = total_cur = 0
+        total_inv = total_cur = 0.0
         for f in fund_gains:
             g   = float(f.get('gain') or 0)
             gc  = GREEN if g >= 0 else RED
@@ -664,7 +659,6 @@ class MFPortfolioPDFGenerator:
             cur = float(f.get('current_value')   or 0)
             total_inv += inv; total_cur += cur
 
-            # Format folio start date — accept string or datetime
             fsd = f.get('folio_start_date') or f.get('FolioStartDate') or '—'
             if hasattr(fsd, 'strftime'):
                 fsd = fsd.strftime('%d-%b-%Y')
@@ -684,12 +678,32 @@ class MFPortfolioPDFGenerator:
                 _xirr_cell(f.get('xirr')),
             ])
 
-        tg  = total_cur - total_inv
-        ta  = (tg / total_inv * 100) if total_inv > 0 else 0
+        tg   = total_cur - total_inv
+        ta   = (tg / total_inv * 100) if total_inv > 0 else 0
         sign = '+' if tg >= 0 else ''
-        # Total row uses th/th_left styles (white text) so NAVY bg shows correctly.
-        # Inline <font color=...> in Paragraph overrides TEXTCOLOR table commands,
-        # so we avoid coloured markup here and rely on the white paragraph styles.
+
+        # Value-weighted portfolio XIRR
+        _port_xirr = None
+        try:
+            _num = sum(
+                (float(f.get('xirr') or 0)) * (float(f.get('current_value') or 0))
+                for f in fund_gains if f.get('xirr') is not None
+            )
+            _den = sum(float(f.get('current_value') or 0) for f in fund_gains)
+            if _den > 0:
+                _port_xirr = _num / _den
+        except Exception:
+            _port_xirr = None
+
+        if _port_xirr is not None:
+            _col = "#eef4ee" if _port_xirr >= 0 else '#cc0000'
+            _xirr_total_cell = Paragraph(
+                f"<font color='{_col}'><b>{_port_xirr:.2f}%</b></font>",
+                S['th']
+            )
+        else:
+            _xirr_total_cell = Paragraph("—", S['th'])
+
         rows.append([
             Paragraph("<b>Total Portfolio</b>",      S['th_left']),
             Paragraph("",                            S['th']),
@@ -697,18 +711,15 @@ class MFPortfolioPDFGenerator:
             Paragraph(_fmt_inr(total_cur),           S['th']),
             Paragraph(f"{sign}{_fmt_inr(abs(tg))}",  S['th']),
             Paragraph(f"<b>{sign}{ta:.2f}%</b>",    S['th']),
-            Paragraph("—",                           S['th']),
+            _xirr_total_cell,
         ])
 
-        # 7 cols summing to 7.0"
         col_w = [2.0*inch, 0.85*inch, 0.9*inch, 0.9*inch, 0.9*inch, 0.75*inch, 0.7*inch]
         t  = Table(rows, colWidths=col_w, repeatRows=1)
         ts = _base_ts()
         ts.add('ALIGN', (0,0), (1,-1), 'LEFT')
         ts.add('ALIGN', (2,1), (-1,-1), 'RIGHT')
-        # Alt rows for data rows only (rows 1 .. last-1); added first
         for cmd in _alt_rows(len(rows) - 1): ts.add(*cmd)
-        # Total row NAVY — added last so it cannot be overridden
         last = len(rows) - 1
         ts.add('BACKGROUND', (0,last), (-1,last), NAVY)
         ts.add('LINEABOVE',  (0,last), (-1,last), 1.5, MID_BLUE)
@@ -716,43 +727,114 @@ class MFPortfolioPDFGenerator:
         story.append(t)
         return story
 
+    # ── FIX 3: Section 3 — improved pie chart readability ────────────────────
     def _build_amc_pie(self, amc_data):
         items = sorted(amc_data.items(),
-                       key=lambda x: x[1]['pct'] if isinstance(x[1],dict) else x[1],
+                       key=lambda x: x[1]['pct'] if isinstance(x[1], dict) else x[1],
                        reverse=True)
-        labels = [k for k,_ in items]
-        sizes  = [v['pct'] if isinstance(v,dict) else v/sum(amc_data.values())*100
-                  for _,v in items]
-        vals   = [v['value'] if isinstance(v,dict) else 0 for _,v in items]
+        labels = [k for k, _ in items]
+        sizes  = [
+            v['pct'] if isinstance(v, dict) else v / sum(amc_data.values()) * 100
+            for _, v in items
+        ]
+        vals   = [v['value'] if isinstance(v, dict) else 0 for _, v in items]
+        n      = len(items)
 
-        palette = ['#1a2a5e','#2e4899','#4a6bc4','#7090d8','#a0b8e8','#c8d8f4','#3a5a9e']
-        fig, (ax_pie, ax_leg) = plt.subplots(1, 2, figsize=(7.5, 2.8),
-                                              gridspec_kw={'width_ratios':[1,1.3]})
+        # Distinct, high-contrast palette (up to 10 AMCs)
+        palette = [
+            '#1a2a5e', '#c0392b', '#27ae60', '#e67e22', '#8e44ad',
+            '#2980b9', '#16a085', '#d35400', '#2c3e50', '#7f8c8d',
+        ]
+        wedge_colors = [palette[i % len(palette)] for i in range(n)]
+
+        # Dynamic figure height — grows with number of AMCs
+        fig_h = max(3.2, 0.44 * n + 0.9)
+        fig, (ax_pie, ax_leg) = plt.subplots(
+            1, 2, figsize=(8.0, fig_h),
+            gridspec_kw={'width_ratios': [1, 1.5]}
+        )
         fig.patch.set_facecolor('white')
-        wedges, _ = ax_pie.pie(sizes, colors=palette[:len(sizes)], startangle=90,
-                               wedgeprops=dict(width=0.55, edgecolor='white', linewidth=1.5))
-        ax_pie.set_title("AMC Concentration", fontsize=9, fontweight='bold', color='#1a2a5e', pad=6)
 
+        wedges, _ = ax_pie.pie(
+            sizes,
+            colors=wedge_colors,
+            startangle=90,
+            wedgeprops=dict(width=0.62, edgecolor='white', linewidth=2.0),
+            counterclock=False,
+        )
+        ax_pie.set_aspect('equal')
+        ax_pie.set_title("AMC Concentration", fontsize=9, fontweight='bold',
+                         color='#1a2a5e', pad=8)
+
+        # Legend — coloured %, AMC name, Rs. value on second line
         ax_leg.axis('off')
-        for i, (lbl, sz, val) in enumerate(zip(labels, sizes, vals)):
-            y = 0.93 - i*(0.86/len(labels))
-            ax_leg.add_patch(mpatches.Rectangle((0,y-0.04),0.045,0.07,
-                             color=palette[i%len(palette)], transform=ax_leg.transAxes))
-            vstr = f"  Rs.{val:,.0f}" if val else ''
-            ax_leg.text(0.07, y, f"{sz:.1f}%  {lbl}{vstr}",
-                        transform=ax_leg.transAxes, fontsize=7.5, va='center', color='#222222')
+        row_h  = 0.86 / max(n, 1)
+        top    = 0.93
+        box_w  = 0.055
+        box_h  = min(row_h * 0.60, 0.065)
+        gap    = 0.014
 
-        plt.tight_layout(pad=0.6)
+        for i, (lbl, sz, val) in enumerate(zip(labels, sizes, vals)):
+            y_c = top - i * row_h
+
+            # Colour swatch (rounded rectangle)
+            ax_leg.add_patch(mpatches.FancyBboxPatch(
+                (0.0, y_c - box_h / 2), box_w, box_h,
+                boxstyle="round,pad=0.005",
+                facecolor=wedge_colors[i], edgecolor='white', linewidth=0.5,
+                transform=ax_leg.transAxes, clip_on=False,
+            ))
+
+            # Percentage — bold, same colour as wedge
+            ax_leg.text(
+                box_w + gap, y_c,
+                f"{sz:.1f}%",
+                transform=ax_leg.transAxes,
+                fontsize=8.5, fontweight='bold',
+                color=wedge_colors[i], va='center',
+            )
+
+            # Shortened AMC name — dark, readable
+            short_lbl = (lbl
+                         .replace(' Asset Management Company', '')
+                         .replace(' Asset Management', '')
+                         .replace(' Mutual Fund', '')
+                         .replace(' AMC', ''))
+            ax_leg.text(
+                box_w + gap + 0.092, y_c,
+                short_lbl,
+                transform=ax_leg.transAxes,
+                fontsize=8.0, color='#1a1a1a', va='center',
+            )
+
+            # Rs. value — smaller, grey, below the name line
+            if val:
+                ax_leg.text(
+                    box_w + gap, y_c - row_h * 0.40,
+                    f"Rs.{val:,.0f}",
+                    transform=ax_leg.transAxes,
+                    fontsize=6.8, color='#666666', va='center',
+                )
+
+        plt.tight_layout(pad=0.5)
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        buf.seek(0); plt.close(fig)
+        plt.savefig(buf, format='png', dpi=160, bbox_inches='tight',
+                    facecolor='white', edgecolor='none')
+        buf.seek(0)
+        plt.close(fig)
         return buf
 
     def _section_amc(self, amc_data):
-        story = [_p("3  AMC Concentration",'section')]
-        story.append(_p("This shows how your money is spread across fund houses (AMCs), based on current market value as on the report date.",'cell_sm'))
-        story.append(Spacer(1,0.06*inch))
-        story.append(Image(self._build_amc_pie(amc_data), width=PAGE_W*inch, height=2.7*inch))
+        story = [_p("3  AMC Concentration", 'section')]
+        story.append(_p(
+            "This shows how your money is spread across fund houses (AMCs), "
+            "based on current market value as on the report date.", 'cell_sm'))
+        story.append(Spacer(1, 0.06*inch))
+        # Dynamic height — matches the chart
+        n_amcs  = len(amc_data)
+        chart_h = max(2.9, 0.40 * n_amcs + 0.9)
+        story.append(Image(self._build_amc_pie(amc_data),
+                           width=PAGE_W*inch, height=chart_h*inch))
         return story
 
     def _page_cb(self, canvas, doc):
@@ -775,8 +857,10 @@ class MFPortfolioPDFGenerator:
         story.append(HeaderBanner(
             page_w=page_w, company=self.company_name,
             client_name=client_name, report_date=d.get('report_date',''),
-            investment_start=d.get('investment_start',''), prepared_by=d.get('prepared_by',self.company_name),
-            risk_profile=d.get('risk_profile',''), reference_benchmark=d.get('reference_benchmark',''),
+            investment_start=d.get('investment_start',''),
+            prepared_by=d.get('prepared_by', self.company_name),
+            risk_profile=d.get('risk_profile',''),
+            reference_benchmark=d.get('reference_benchmark',''),
             n_funds=d.get('n_funds',''), n_amcs=d.get('n_amcs',''),
             data_as_on=d.get('data_as_on', d.get('report_date','')),
             logo_path=logo_path,
@@ -797,16 +881,16 @@ class MFPortfolioPDFGenerator:
             story.extend(self._section_amc(d['amc_concentration']))
             story.append(Spacer(1, 0.1*inch))
 
-        commentary = d.get('commentary',[])
+        commentary = d.get('commentary', [])
         if not commentary and d.get('_ai_commentary_raw'):
             commentary = _parse_commentary(d['_ai_commentary_raw'])
         if commentary:
             story.append(PageBreak())
-            story.append(_p("Overall Performance Commentary",'section'))
+            story.append(_p("Overall Performance Commentary", 'section'))
             story.append(HRFlowable(width='100%', thickness=1, color=RULE_COLOR, spaceAfter=6))
             for block in commentary:
-                story.append(_p(block.get('heading',''),'comment_h'))
-                story.append(_p(block.get('body',''),'comment_b'))
+                story.append(_p(block.get('heading',''), 'comment_h'))
+                story.append(_p(block.get('body',''),    'comment_b'))
 
         story.append(Spacer(1, 0.12*inch))
         story.append(HRFlowable(width='100%', thickness=0.5, color=RULE_COLOR, spaceAfter=4))
@@ -821,7 +905,7 @@ class MFPortfolioPDFGenerator:
         contact = ' | '.join(filter(None, [self._email, self._website]))
         if contact:
             story.append(Spacer(1, 0.05*inch))
-            story.append(_p(f"{self.company_name}  |  {contact}",'cell_sm_c'))
+            story.append(_p(f"{self.company_name}  |  {contact}", 'cell_sm_c'))
 
         doc.build(story, onFirstPage=self._page_cb, onLaterPages=self._page_cb)
         return output_file
@@ -850,22 +934,31 @@ if __name__ == "__main__":
             {'asset_class':'Debt',  'your_allocation':'0.00%', 'funds_in_portfolio':'—'},
         ],
         'all_funds':[
-            # Required keys: name, benchmark_index, winrich_rank, xirr, benchmark_xirr
             {'name':'Franklin India Flexi Cap',
-             'benchmark_index':'Nifty 500 TRI',   'winrich_rank':'7 / 39',
-             'xirr':4.04,   'benchmark_xirr':3.27},
+             'benchmark_index':'Nifty 500 TRI',       'winrich_rank':'7 / 39',
+             'xirr':4.04,
+             'benchmark_return_3m':2.1, 'benchmark_return_1yr':12.4,
+             'benchmark_return_3yr':14.8, 'benchmark_return_5yr':17.2},
             {'name':'ICICI Pru Large Cap',
-             'benchmark_index':'Nifty 100 TRI',   'winrich_rank':'1 / 31',
-             'xirr':5.97,   'benchmark_xirr':4.12},
+             'benchmark_index':'Nifty 100 TRI',       'winrich_rank':'1 / 31',
+             'xirr':5.97,
+             'benchmark_return_3m':1.8, 'benchmark_return_1yr':11.2,
+             'benchmark_return_3yr':13.5, 'benchmark_return_5yr':15.9},
             {'name':'Kotak Midcap',
-             'benchmark_index':'Nifty Midcap 150 TRI', 'winrich_rank':'3 / 29',
-             'xirr':7.25,   'benchmark_xirr':5.80},
+             'benchmark_index':'Nifty Midcap 150 TRI','winrich_rank':'3 / 29',
+             'xirr':7.25,
+             'benchmark_return_3m':3.2, 'benchmark_return_1yr':15.6,
+             'benchmark_return_3yr':18.1, 'benchmark_return_5yr':22.4},
             {'name':'Edelweiss BAF',
-             'benchmark_index':'Nifty 50 Hybrid 65:35 TRI', 'winrich_rank':'5 / 34',
-             'xirr':4.98,   'benchmark_xirr':3.90},
+             'benchmark_index':'Nifty 50 Hybrid 65:35 TRI','winrich_rank':'5 / 34',
+             'xirr':4.98,
+             'benchmark_return_3m':1.5, 'benchmark_return_1yr':10.1,
+             'benchmark_return_3yr':11.8, 'benchmark_return_5yr':13.2},
             {'name':'Mirae Asset Gold Silver FOF',
-             'benchmark_index':'Domestic Gold & Silver Price', 'winrich_rank':'No Rank',
-             'xirr':271.34, 'benchmark_xirr':None},
+             'benchmark_index':'Domestic Gold & Silver Price','winrich_rank':'No Rank',
+             'xirr':271.34,
+             'benchmark_return_3m':None, 'benchmark_return_1yr':None,
+             'benchmark_return_3yr':None, 'benchmark_return_5yr':None},
         ],
         'fund_gains':[
             {'name':'Franklin India Flexi Cap',  'folio_start_date':'16-Nov-2023','amount_invested':185991,'current_value':196454,'gain':10464,'abs_return':5.63,'xirr':4.04},
@@ -885,13 +978,13 @@ if __name__ == "__main__":
             {'heading':'How Your Portfolio Has Done Overall',
              'body':'Your portfolio is currently worth Rs.8,18,668 against a total investment of Rs.7,55,962, giving you a net gain of Rs.62,706. Your overall XIRR since you started investing in November 2023 is 6.15% per year.'},
             {'heading':'Your Equity Funds',
-             'body':'The three equity funds have all earned more than their respective benchmark indices. Kotak Midcap leads with XIRR 7.25%, ahead of its benchmark XIRR 5.80%. ICICI Pru Large Cap is ranked 1st out of 31 funds.'},
+             'body':'The three equity funds have all earned more than their respective benchmark indices. Kotak Midcap leads with XIRR 7.25%, ahead of its Nifty Midcap 150 TRI 3Y benchmark return of 18.1%. ICICI Pru Large Cap is ranked 1st out of 31 funds in its category.'},
             {'heading':'Your Hybrid Fund',
-             'body':'Edelweiss BAF has returned XIRR 4.98%, ahead of its benchmark XIRR 3.90%. It serves as a steady, lower-volatility anchor in your portfolio.'},
+             'body':'Edelweiss BAF has returned XIRR 4.98%, ahead of its benchmark. It serves as a steady, lower-volatility anchor in your portfolio.'},
             {'heading':'Key Observations',
              'body':'All four actively managed funds are ranked in the top quartile of their categories. Your portfolio is well diversified across 5 fund houses and every fund has outperformed its benchmark since your investment date.'},
         ],
     }
     print("Generating PDF...")
-    out = MFPortfolioPDFGenerator().generate_report(sample, "/mnt/user-data/outputs/winrich_new_format.pdf")
+    out = MFPortfolioPDFGenerator().generate_report(sample, "/tmp/winrich_test.pdf")
     print(f"Done: {out}")

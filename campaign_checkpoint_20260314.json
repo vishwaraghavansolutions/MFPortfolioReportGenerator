@@ -1,0 +1,31 @@
+{
+  "succeeded": [],
+  "pdf_done": {
+    "Aashee Varma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AasheeVarma_portfolio_report.pdf",
+    "Aathish Chinnakonda Sathish Kumar": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AathishChinnakondaSathishKumar_portfolio_report.pdf",
+    "Abhilekh Verma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhilekhVerma_portfolio_report.pdf",
+    "A Balamurugan": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__ABalamurugan_portfolio_report.pdf",
+    "Abhinav Kapoor": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhinavKapoor_portfolio_report.pdf",
+    "Abhinesh Vemula": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhineshVemula_portfolio_report.pdf",
+    "Abhinav Sivakumar": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhinavSivakumar_portfolio_report.pdf",
+    "Abhishek Ajit Patil": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhishekAjitPatil_portfolio_report.pdf",
+    "Abhishek Jayanna Bollarapu": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhishekJayannaBollarapu_portfolio_report.pdf",
+    "Abhishek Sharma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AbhishekSharma_portfolio_report.pdf",
+    "Aditya Sharma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__AdityaSharma_portfolio_report.pdf",
+    "Venkata Raghav Parthasarathy": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260314__VenkataRaghavParthasarathy_portfolio_report.pdf"
+  },
+  "gcs_done": {
+    "Abhilekh Verma": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhilekh_verma/20260314__AbhilekhVerma_portfolio_report.pdf",
+    "Aashee Varma": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/aashee_varma/20260314__AasheeVarma_portfolio_report.pdf",
+    "Abhishek Sharma": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhishek_sharma/20260314__AbhishekSharma_portfolio_report.pdf",
+    "Abhinav Sivakumar": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhinav_sivakumar/20260314__AbhinavSivakumar_portfolio_report.pdf",
+    "Abhishek Jayanna Bollarapu": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/abhishek_jayanna_bollarapu/20260314__AbhishekJayannaBollarapu_portfolio_report.pdf",
+    "Venkata Raghav Parthasarathy": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/venkata_raghav_parthasarathy/20260314__VenkataRaghavParthasarathy_portfolio_report.pdf"
+  },
+  "failed": {
+    "Venkata Raghav Parthasarathy": "SMTP_USER environment variable is not set"
+  },
+  "skipped": {},
+  "started_at": "2026-03-14T17:37:38.702246+00:00",
+  "updated_at": "2026-03-14T17:58:32.701729+00:00"
+}
