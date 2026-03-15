@@ -1,0 +1,16 @@
+{
+  "_comment": "AMC name aliases used during fund-name matching in FundRankingAgent.",
+  "_comment2": "Each entry maps the full portfolio name (key) to the abbreviated CSV name (value).",
+  "_comment3": "Both sides should be lower-cased. The agent normalises before substitution.",
+  "amc_aliases": {
+    "canara robeco":    "canara rob",
+    "icici prudential": "icici pru",
+    "kotak mahindra":   "kotak",
+    "nippon india":     "nippon india",
+    "mirae asset":      "mirae asset",
+    "pgim india":       "pgim india",
+    "bandhan":          "bandhan",
+    "edelweiss":        "edelweiss"
+  },
+  "plan_filter": "Growth"
+}
