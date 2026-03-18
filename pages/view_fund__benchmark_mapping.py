@@ -17,6 +17,8 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent))
 from agents.mf_benchmark_agent import MutualFundBenchmarkAgent, _BENCHMARK_MAP
+from utils.auth import require_login
+from utils.navbar import navbar
 
 MAPPING_FILE = "data/mf_benchmark_map.parquet"
 
@@ -27,6 +29,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+require_login()
+navbar()
 
 # ── Design system ─────────────────────────────────────────────────────────────
 # Palette: deep navy background, slate cards, blue accent, muted status colours

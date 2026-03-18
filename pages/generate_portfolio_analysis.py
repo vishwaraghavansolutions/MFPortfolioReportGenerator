@@ -22,6 +22,8 @@ import streamlit as st
 
 from agents.base import AgentStatus
 from agents.mf_portfolio_agent import MFPortfolioAgent
+from utils.auth import require_login
+from utils.navbar import navbar
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -29,6 +31,8 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+
+require_login()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 _DEFAULT_BUCKET  = "winrich"
@@ -129,6 +133,7 @@ with st.sidebar:
 
 
 # ── Main panel ────────────────────────────────────────────────────────────────
+navbar()
 st.title("📊 Portfolio Performance Report")
 st.caption(
     f"Data source: `gs://{bucket_name}/Datawarehouse/MutualFunds/<YYYY>/<MM>/mutualfunds.csv` "
@@ -195,8 +200,6 @@ if generate_clicked and selected_customer:
     r2 = agent.run("enrich_benchmarks", {**base_params, "customer_df": customer_df})
     if r2.status == AgentStatus.SUCCESS:
         customer_df = r2.output["customer_df"]
-        st.write("Before enrichment:")
-        st.write(customer_df)
     else:
         st.warning(f"⚠️ Benchmark enrichment failed: {r2.error}")
 
@@ -208,9 +211,6 @@ if generate_clicked and selected_customer:
     else:
         st.warning(f"⚠️ Fund ranking failed: {r3.error}")
 
-
-    st.write("After enrichment:")
-    st.write(customer_df)
     # ── Step 4: calculate metrics ─────────────────────────────────────────────
     progress.progress(55, text="📐 Calculating metrics…")
     r4 = agent.run("calculate_metrics", {"customer_df": customer_df})

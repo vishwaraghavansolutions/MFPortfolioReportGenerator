@@ -169,6 +169,7 @@ class GCSStorageAgent(Agent):
             "list_ranking_files":      self._list_ranking_files,
             "store_portfolio_summary": self._store_portfolio_summary,
             "load_portfolio_summary":  self._load_portfolio_summary,
+            "upload_csv":              self._upload_csv,
         }
 
     def get_skills(self) -> Dict[str, Callable]:
@@ -797,4 +798,80 @@ class GCSStorageAgent(Agent):
             },
             metadata={"bucket_name": bucket_name, "blob_name": blob_name,
                       "customer_filter": customer_name or None},
+        )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Skill 9 — upload_csv
+    # ──────────────────────────────────────────────────────────────────────────
+    def _upload_csv(self, params: Dict[str, Any]) -> AgentResponse:
+        """
+        Upload a local CSV file to GCS at {prefix}/{filename}.
+
+        Unlike upload_report, this skill does NOT add a customer subfolder —
+        the blob path is simply <prefix>/<filename>.  Use it for shared master
+        data files (e.g. mf_benchmark_map.csv).
+
+        Required params
+        ---------------
+        file_path     : str   – local filesystem path to the CSV
+        filename      : str   – GCS object filename (e.g. "mf_benchmark_map.csv")
+
+        Optional params
+        ---------------
+        bucket_name   : str   – default "winrich_shared"
+        prefix        : str   – default "master"
+
+        Output keys
+        -----------
+        gcs_uri       : str   – gs://bucket/blob_name
+        blob_name     : str
+        bucket_name   : str
+        public_url    : str
+        size_bytes    : int
+        """
+        file_path = params.get("file_path", "").strip()
+        filename  = params.get("filename",  "").strip()
+
+        if not file_path:
+            return AgentResponse(AgentStatus.FAILED, error="'file_path' is required")
+        if not filename:
+            return AgentResponse(AgentStatus.FAILED, error="'filename' is required")
+        if not os.path.exists(file_path):
+            return AgentResponse(AgentStatus.FAILED, error=f"File not found: {file_path}")
+
+        bucket_name = params.get("bucket_name", _DEFAULT_RANKING_BUCKET)
+        prefix      = params.get("prefix",      "master").rstrip("/")
+        blob_name   = f"{prefix}/{filename}" if prefix else filename
+        gcs_uri     = f"gs://{bucket_name}/{blob_name}"
+
+        try:
+            client = _get_gcs_client()
+            bucket = client.bucket(bucket_name)
+            blob   = bucket.blob(blob_name)
+            blob.metadata = {"uploaded_at": datetime.now(timezone.utc).isoformat(),
+                             "source_path": file_path}
+
+            logging.info(f"Uploading {file_path} to {gcs_uri}...")
+            blob.upload_from_filename(file_path, content_type="text/csv")
+
+            size_bytes = os.path.getsize(file_path)
+            public_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
+
+        except Exception as exc:
+            return AgentResponse(
+                AgentStatus.RETRY,
+                error=f"GCS upload_csv failed: {exc}",
+                metadata={"bucket_name": bucket_name, "blob_name": blob_name},
+            )
+
+        return AgentResponse(
+            AgentStatus.SUCCESS,
+            output={
+                "gcs_uri":    gcs_uri,
+                "blob_name":  blob_name,
+                "bucket_name": bucket_name,
+                "public_url": public_url,
+                "size_bytes": size_bytes,
+            },
+            metadata={"filename": filename, "prefix": prefix},
         )

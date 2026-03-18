@@ -5,12 +5,12 @@ Mutual Fund Benchmark Agent  (MutualFundBenchmarkAgent)
 ────────────────────────────────────────────────────────
 All skills are registered directly in the class body.
 
-Parquet-only skills (require data/mf_benchmark_map.parquet; FAIL if absent):
+CSV skills (load from GCS winrich_shared/master/mf_benchmark_map.csv; FAIL if absent):
   1  get_amc_list
   2  get_funds_by_amc
   3  get_fund_benchmark
   4  get_scheme_classification    — returns scheme_type + scheme_category for ranking
-  5  lookup_benchmark_by_name     — parquet first, live fallback removed
+  5  lookup_benchmark_by_name     — CSV first, live fallback removed
   6  get_asset_classes
   7  get_fund_types
   8  get_funds_by_filter          — includes benchmark_source per fund
@@ -25,8 +25,9 @@ Live mfapi skills (hit mfapi.in directly; use sparingly):
   15 get_scheme_classification_from_mfapi
 
 Admin / rebuild skill:
-  16 rebuild_benchmark_master     — fetches all schemes from mfapi and writes
-                                    data/mf_benchmark_map.parquet (slow; run once)
+  16 rebuild_benchmark_master     — fetches all schemes from mfapi, writes
+                                    data/mf_benchmark_map.csv locally and uploads
+                                    to GCS winrich_shared/master (slow; run once)
 """
 
 from __future__ import annotations
@@ -36,13 +37,28 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .base import Agent, AgentResponse, AgentStatus
+from .gcs_storage_agent import GCSStorageAgent
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL             = "https://api.mfapi.in"
 ALL_MF_URL           = f"{BASE_URL}/mf"
 SCHEME_URL           = f"{BASE_URL}/mf/{{code}}"
 TIMEOUT              = 15
-DEFAULT_MAPPING_FILE = Path("data/mf_benchmark_map.parquet")
+DEFAULT_MAPPING_FILE = Path("data/mf_benchmark_map.csv")
+
+# GCS coordinates for the benchmark master CSV
+_DEFAULT_MASTER_BUCKET   = "winrich_shared"
+_DEFAULT_MASTER_PREFIX   = "Master"
+_DEFAULT_MASTER_FILENAME = "mf_funds_master.csv"
+
+# ── Lazy GCSStorageAgent accessor ─────────────────────────────────────────────
+_gcs_agent_instance: Optional[GCSStorageAgent] = None
+
+def _get_gcs_agent() -> GCSStorageAgent:
+    global _gcs_agent_instance
+    if _gcs_agent_instance is None:
+        _gcs_agent_instance = GCSStorageAgent()
+    return _gcs_agent_instance
 
 _MAP_COLS = [
     "scheme_code", "scheme_name", "fund_house", "scheme_type",
@@ -64,15 +80,28 @@ def _all_schemes() -> List[Dict]:
 _mapping_df_cache: Optional[Any] = None
 
 def _load_mapping(mapping_file: Optional[str] = None) -> Optional[Any]:
+    """Load the benchmark mapping CSV from GCS (primary) or a local override path."""
     global _mapping_df_cache
     if _mapping_df_cache is not None:
         return _mapping_df_cache
-    path = Path(mapping_file) if mapping_file else DEFAULT_MAPPING_FILE
-    if not path.exists():
-        return None
     try:
         import pandas as pd
-        df = pd.read_parquet(path)
+        if mapping_file:
+            # Explicit local file override (e.g. for testing)
+            path = Path(mapping_file)
+            if not path.exists():
+                return None
+            df = pd.read_csv(path)
+        else:
+            # Primary source: GCS
+            resp = _get_gcs_agent().run("load_ranking_csv", {
+                "filename":    _DEFAULT_MASTER_FILENAME,
+                "bucket_name": _DEFAULT_MASTER_BUCKET,
+                "prefix":      _DEFAULT_MASTER_PREFIX,
+            })
+            if resp.status != AgentStatus.SUCCESS:
+                return None
+            df = resp.output["dataframe"]
         for col in ("scheme_name", "fund_house", "scheme_category", "benchmark"):
             if col in df.columns:
                 df[col] = df[col].fillna("").astype(str)
@@ -89,9 +118,23 @@ def _require_df(mapping_file: Optional[str] = None):
     df = _load_mapping(mapping_file)
     if df is None:
         raise FileNotFoundError(
-            "mf_benchmark_map.parquet not found. Run main.py first."
+            "mf_benchmark_map.csv not found in GCS. Run rebuild_benchmark_master first."
         )
     return df
+
+def _save_and_upload_csv(df: Any, mapping_path: Path) -> str:
+    """Save df to a local CSV and upload it to GCS. Returns the gcs_uri."""
+    mapping_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(mapping_path, index=False)
+    resp = _get_gcs_agent().run("upload_csv", {
+        "file_path":   str(mapping_path),
+        "filename":    _DEFAULT_MASTER_FILENAME,
+        "bucket_name": _DEFAULT_MASTER_BUCKET,
+        "prefix":      _DEFAULT_MASTER_PREFIX,
+    })
+    if resp.status != AgentStatus.SUCCESS:
+        raise RuntimeError(f"GCS upload failed: {resp.error}")
+    return resp.output["gcs_uri"]
 
 # ── SEBI benchmark derivation ─────────────────────────────────────────────────
 
@@ -217,7 +260,7 @@ def skill_get_funds_by_amc(params: Dict[str, Any]) -> AgentResponse:
 
 
 def skill_get_fund_benchmark(params: Dict[str, Any]) -> AgentResponse:
-    """Parquet-only lookup. Run 'rebuild_benchmark_master' if the parquet is absent."""
+    """CSV lookup. Run rebuild_benchmark_master if mf_benchmark_map.csv is absent."""
     code = params.get("scheme_code")
     if code is None:
         return AgentResponse(status=AgentStatus.FAILED, error="'scheme_code' param is required.")
@@ -229,8 +272,8 @@ def skill_get_fund_benchmark(params: Dict[str, Any]) -> AgentResponse:
     if hits.empty:
         return AgentResponse(
             status=AgentStatus.FAILED,
-            error=f"scheme_code {code} not found in mf_benchmark_map.parquet. "
-                  "Run 'rebuild_benchmark_master' to refresh.",
+            error=f"scheme_code {code} not found in mf_benchmark_map.csv. "
+                  "Run rebuild_benchmark_master to refresh.",
         )
     row      = hits.iloc[0]
     category = str(row.get("scheme_category", ""))
@@ -248,20 +291,20 @@ def skill_get_fund_benchmark(params: Dict[str, Any]) -> AgentResponse:
 
 def skill_get_scheme_classification(params: Dict[str, Any]) -> AgentResponse:
     """
-    Returns scheme_type and scheme_category from the parquet mapping file.
-    Requires data/mf_benchmark_map.parquet — run 'rebuild_benchmark_master' if absent.
+    Returns scheme_type and scheme_category from the CSV mapping file.
+    Requires data/mf_benchmark_map.csv — run 'rebuild_benchmark_master' if absent.
 
     Input — provide ONE of:
-      scheme_code  : int       → single parquet lookup
-      scheme_codes : List[int] → bulk parquet lookup
-      fund_name    : str       → name-based parquet lookup (add exact=True for exact match)
+      scheme_code  : int       → single CSV lookup
+      scheme_codes : List[int] → bulk CSV lookup
+      fund_name    : str       → name-based CSV lookup (add exact=True for exact match)
 
     Output (single / fund_name mode):
       scheme_code, scheme_name, fund_house, scheme_type, scheme_category, benchmark
 
     Output (bulk mode):
       results : List[dict]  — one entry per resolved scheme_code
-      failed  : List[int]   — codes not found in parquet
+      failed  : List[int]   — codes not found in CSV
     """
     try:
         df = _require_df(params.get("mapping_file"))
@@ -296,13 +339,13 @@ def skill_get_scheme_classification(params: Dict[str, Any]) -> AgentResponse:
         if not results:
             return AgentResponse(
                 status=AgentStatus.FAILED,
-                error=f"None of {len(scheme_codes)} scheme_codes found in parquet.",
+                error=f"None of {len(scheme_codes)} scheme_codes found in CSV.",
                 output={"results": [], "failed": failed},
             )
         return AgentResponse(
             status=AgentStatus.SUCCESS,
             output={"results": results, "failed": failed},
-            metadata={"resolved": len(results), "failed": len(failed), "source": "parquet"},
+            metadata={"resolved": len(results), "failed": len(failed), "source": "csv"},
         )
 
     # ── Single scheme_code mode ───────────────────────────────────────────────
@@ -311,13 +354,13 @@ def skill_get_scheme_classification(params: Dict[str, Any]) -> AgentResponse:
         if hits.empty:
             return AgentResponse(
                 status=AgentStatus.FAILED,
-                error=f"scheme_code {scheme_code} not found in mf_benchmark_map.parquet. "
-                      "Run 'rebuild_benchmark_master' to refresh.",
+                error=f"scheme_code {scheme_code} not found in mf_benchmark_map.csv. "
+                      "Run rebuild_benchmark_master to refresh.",
             )
         return AgentResponse(
             status=AgentStatus.SUCCESS,
             output=_row_to_output(hits.iloc[0]),
-            metadata={"source": "parquet"},
+            metadata={"source": "csv"},
         )
 
     # ── fund_name mode ────────────────────────────────────────────────────────
@@ -330,12 +373,12 @@ def skill_get_scheme_classification(params: Dict[str, Any]) -> AgentResponse:
         if hits.empty:
             return AgentResponse(
                 status=AgentStatus.FAILED,
-                error=f"No match for fund_name='{fund_name}' in mf_benchmark_map.parquet.",
+                error=f"No match for fund_name='{fund_name}' in mf_benchmark_map.csv.",
             )
         return AgentResponse(
             status=AgentStatus.SUCCESS,
             output=_row_to_output(hits.iloc[0]),
-            metadata={"match_count": len(hits), "source": "parquet"},
+            metadata={"match_count": len(hits), "source": "csv"},
         )
 
     return AgentResponse(
@@ -358,19 +401,34 @@ def skill_lookup_benchmark_by_name(params: Dict[str, Any]) -> AgentResponse:
     except FileNotFoundError as e:
         return AgentResponse(status=AgentStatus.FAILED, error=str(e))
 
-    name_lower = fund_name.lower()
-    mask = (df["scheme_name"].str.lower() == name_lower if exact
-            else df["scheme_name"].str.lower().str.contains(name_lower, regex=False))
+    # Compare only the portion before " - " in both the query and the scheme_name.
+    # e.g. "Canara Robeco Large Cap Fund - Regular Growth" → "canara robeco large cap fund"
+    def _base(s: str) -> str:
+        return s.split(" - ")[0].strip().lower()
+
+    query_base   = _base(fund_name)
+    scheme_bases = df["scheme_name"].fillna("").apply(_base)
+
+    if exact:
+        mask = scheme_bases == query_base
+    else:
+        # Bidirectional containment: handles cases where the customer fund name
+        # has no dashes (e.g. "SBI Small Cap Fund Regular Growth") so query_base
+        # is the full name, longer than scheme_base ("SBI Small Cap Fund").
+        mask = (
+            scheme_bases.str.contains(query_base, regex=False)
+            | scheme_bases.apply(lambda b: bool(b) and b in query_base)
+        )
     if amc_filter:  mask &= df["fund_house"].str.lower().str.contains(amc_filter, regex=False)
     if type_filter: mask &= df["scheme_category"].str.lower().str.contains(type_filter, regex=False)
     hits = df[mask]
     if hits.empty:
         return AgentResponse(status=AgentStatus.FAILED,
-                             error=f"No matches for fund_name='{fund_name}' in mf_benchmark_map.parquet.",
-                             metadata={"source": "parquet"})
+                             error=f"No matches for fund_name='{fund_name}' in mf_benchmark_map.csv.",
+                             metadata={"source": "csv"})
     results = [{col: row.get(col) for col in _MAP_COLS} for _, row in hits.iterrows()]
     return AgentResponse(status=AgentStatus.SUCCESS,
-                         output={"query": {"fund_name": fund_name, "source": "parquet"},
+                         output={"query": {"fund_name": fund_name, "source": "csv"},
                                  "matches": results, "count": len(results)})
 
 
@@ -458,13 +516,8 @@ def skill_get_funds_by_filter(params: Dict[str, Any]) -> AgentResponse:
 def skill_update_benchmark(params: Dict[str, Any]) -> AgentResponse:
     mapping_path = Path(params.get("mapping_file") or DEFAULT_MAPPING_FILE)
     try:
-        import pandas as pd
-        if not mapping_path.exists():
-            raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
-        df = pd.read_parquet(mapping_path)
-        for col in ("scheme_name","fund_house","scheme_category","benchmark"):
-            if col in df.columns: df[col] = df[col].fillna("").astype(str)
-    except Exception as e:
+        df = _require_df(params.get("mapping_file")).copy()
+    except FileNotFoundError as e:
         return AgentResponse(status=AgentStatus.FAILED, error=str(e))
 
     updates: List[Dict] = []
@@ -487,12 +540,13 @@ def skill_update_benchmark(params: Dict[str, Any]) -> AgentResponse:
         updated.append({"scheme_code": code, "scheme_name": str(df.loc[idx[0],"scheme_name"]),
                          "old_benchmark": old_bm, "benchmark": new_bm})
     try:
-        df.to_parquet(mapping_path, index=False)
+        gcs_uri = _save_and_upload_csv(df, mapping_path)
         _invalidate_mapping_cache()
     except Exception as e:
         return AgentResponse(status=AgentStatus.FAILED, error=f"Failed to save: {e}")
     return AgentResponse(status=AgentStatus.SUCCESS,
-                         output={"updated": updated, "not_found": not_found, "count": len(updated)})
+                         output={"updated": updated, "not_found": not_found, "count": len(updated)},
+                         metadata={"gcs_uri": gcs_uri})
 
 
 def skill_get_fund_type_summary(params: Dict[str, Any]) -> AgentResponse:
@@ -542,13 +596,8 @@ def skill_update_benchmark_by_fund_type(params: Dict[str, Any]) -> AgentResponse
 
     mapping_path = Path(params.get("mapping_file") or DEFAULT_MAPPING_FILE)
     try:
-        import pandas as pd
-        if not mapping_path.exists():
-            raise FileNotFoundError(f"Mapping file not found: {mapping_path}")
-        df = pd.read_parquet(mapping_path)
-        for col in ("scheme_name","fund_house","scheme_category","benchmark"):
-            if col in df.columns: df[col] = df[col].fillna("").astype(str)
-    except Exception as e:
+        df = _require_df(params.get("mapping_file")).copy()
+    except FileNotFoundError as e:
         return AgentResponse(status=AgentStatus.FAILED, error=str(e))
 
     df["_ac"] = df["scheme_category"].apply(_infer_asset_class)
@@ -562,13 +611,14 @@ def skill_update_benchmark_by_fund_type(params: Dict[str, Any]) -> AgentResponse
     df.loc[mask, "benchmark"] = new_benchmark
     df = df.drop(columns=["_ac","_ft"])
     try:
-        df.to_parquet(mapping_path, index=False)
+        gcs_uri = _save_and_upload_csv(df, mapping_path)
         _invalidate_mapping_cache()
     except Exception as e:
         return AgentResponse(status=AgentStatus.FAILED, error=f"Failed to save: {e}")
     return AgentResponse(status=AgentStatus.SUCCESS,
                          output={"updated_count": updated_count,
-                                 "fund_type": fund_type, "benchmark": new_benchmark})
+                                 "fund_type": fund_type, "benchmark": new_benchmark},
+                         metadata={"gcs_uri": gcs_uri})
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -618,7 +668,7 @@ def skill_get_funds_by_amc_from_mfapi(params: Dict[str, Any]) -> AgentResponse:
 
 
 def skill_get_fund_benchmark_from_mfapi(params: Dict[str, Any]) -> AgentResponse:
-    """Live mfapi lookup for a single scheme_code. Does NOT require the parquet file."""
+    """Live mfapi lookup for a single scheme_code. Does NOT require the CSV file."""
     code = params.get("scheme_code")
     if code is None:
         return AgentResponse(status=AgentStatus.FAILED, error="'scheme_code' param is required.")
@@ -648,7 +698,7 @@ def skill_get_fund_benchmark_from_mfapi(params: Dict[str, Any]) -> AgentResponse
 def skill_get_scheme_classification_from_mfapi(params: Dict[str, Any]) -> AgentResponse:
     """
     Live mfapi lookup for scheme_type and scheme_category.
-    Accepts scheme_code (int) or scheme_codes (List[int]). Does NOT require the parquet file.
+    Accepts scheme_code (int) or scheme_codes (List[int]). Does NOT require the CSV file.
     """
     scheme_codes = params.get("scheme_codes")
     scheme_code  = params.get("scheme_code")
@@ -718,13 +768,14 @@ def skill_get_scheme_classification_from_mfapi(params: Dict[str, Any]) -> AgentR
 def skill_rebuild_benchmark_master(params: Dict[str, Any]) -> AgentResponse:
     """
     Admin skill — fetches every scheme from mfapi.in, enriches each with metadata,
-    derives the SEBI benchmark, and writes data/mf_benchmark_map.parquet.
+    derives the SEBI benchmark, writes data/mf_benchmark_map.csv locally, and
+    uploads it to GCS winrich_shared/master/mf_benchmark_map.csv.
 
     This is intentionally slow (one HTTP request per scheme). Run it once to
-    bootstrap the parquet, then use it periodically to pick up new fund launches.
+    bootstrap the CSV, then use it periodically to pick up new fund launches.
 
     Optional params:
-      mapping_file : str   — override output path (default: data/mf_benchmark_map.parquet)
+      mapping_file : str   — override local output path (default: data/mf_benchmark_map.csv)
       max_schemes  : int   — limit to first N schemes (useful for testing)
     """
     import pandas as pd
@@ -775,15 +826,14 @@ def skill_rebuild_benchmark_master(params: Dict[str, Any]) -> AgentResponse:
             metadata={"errors": errors[:20]},
         )
 
-    # 3. Write parquet
+    # 3. Write CSV locally and upload to GCS
     try:
-        mapping_path.parent.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame(rows)
-        df.to_parquet(mapping_path, index=False)
+        df      = pd.DataFrame(rows)
+        gcs_uri = _save_and_upload_csv(df, mapping_path)
         _invalidate_mapping_cache()
     except Exception as exc:
         return AgentResponse(status=AgentStatus.FAILED,
-                             error=f"Failed to write parquet: {exc}")
+                             error=f"Failed to write/upload CSV: {exc}")
 
     return AgentResponse(
         status=AgentStatus.SUCCESS,
@@ -791,6 +841,7 @@ def skill_rebuild_benchmark_master(params: Dict[str, Any]) -> AgentResponse:
             "schemes_written": len(rows),
             "errors":          len(errors),
             "mapping_file":    str(mapping_path),
+            "gcs_uri":         gcs_uri,
         },
         metadata={"sample_errors": errors[:10]},
     )
@@ -810,7 +861,7 @@ class MutualFundBenchmarkAgent(Agent):
     name = "MutualFundBenchmarkAgent"
 
     skills = {
-        # Parquet-only (fail if mf_benchmark_map.parquet absent)
+        # Parquet-only (fail if mf_benchmark_map.csv absent)
         "get_amc_list"                        : skill_get_amc_list,
         "get_funds_by_amc"                    : skill_get_funds_by_amc,
         "get_fund_benchmark"                  : skill_get_fund_benchmark,

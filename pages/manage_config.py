@@ -8,6 +8,10 @@ import json
 import os
 from datetime import datetime
 import importlib.util
+from utils.auth import require_login
+from utils.navbar import navbar
+
+require_login()
 
 
 class ConfigEditor:
@@ -126,6 +130,7 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     def show_editor_ui(self):
         """Display configuration editor UI"""
+        navbar()
         st.title("⚙️ Configuration Editor")
         
         if not self.config_data:
@@ -363,18 +368,11 @@ The Nifty 500 TRI delivered a 5-year CAGR of approximately 12.45%."""
 
 def main():
     """Main function for config editor page"""
-    
-    # Check authentication
-    if "role" not in st.session_state:
-        st.warning("⚠️ Please login to access this page")
-        st.stop()
-    
     # Only allow admin access
     if st.session_state.get("role") != "admin":
         st.error("🔒 Access Denied: Admin privileges required")
         st.stop()
-    
-    # Show editor
+
     editor = ConfigEditor()
     editor.show_editor_ui()
 

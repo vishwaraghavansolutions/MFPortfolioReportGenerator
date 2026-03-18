@@ -625,13 +625,10 @@ class MFPortfolioPDFGenerator:
         t.setStyle(ts)
         story.append(t)
         story.append(_p(
-            "<b>Your XIRR</b> = annualised return from your investment date. "
-            "<b>Bench 3M / 1Y / 3Y / 5Y</b> = benchmark index return over trailing 3-month, 1-year, 3-year, and 5-year periods. "
-            "<b>WinRich Rank</b> = fund's rank among category peers based on risk-adjusted performance. "
-            "<b>Note on trailing-period XIRR:</b> The 3M / 1Y / 3Y / 5Y XIRR figures treat your total ongoing SIP amount as a "
-            "single lump-sum investment made at the start of each period. This is a simplification — individual monthly SIP "
-            "instalments are not modelled separately, so actual SIP returns may vary. "
-            "<b>Past performance is not indicative of future returns.</b>",
+            "Your XIRR = annualised return from your investment date. "
+            "Bench 3M / 1Y / 3Y / 5Y = benchmark index return over trailing 3-month, 1-year, 3-year, and 5-year periods. "
+            "WinRich Rank = fund's rank among category peers. "
+            "Past performance is not indicative of future returns.",
             'footnote'))
         return story
 
