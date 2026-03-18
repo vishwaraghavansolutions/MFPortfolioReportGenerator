@@ -7,3 +7,4 @@ anthropic
 pdfplumber
 google-cloud-storage
 sendgrid
+playwright

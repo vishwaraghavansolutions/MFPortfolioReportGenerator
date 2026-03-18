@@ -14,16 +14,16 @@ import streamlit as st
 
 # Pages visible to every logged-in user
 _NAV_PAGES = [
-    ("📊 Portfolio Analysis",   "pages/generate_portfolio_analysis.py"),
-    ("📨 Report Campaign",       "pages/manage_mfreport_campaign.py"),
+    ("📊 Portfolio Analysis",   "pages/portfolio_analysis.py"),
+    ("📨 Report Campaign",       "pages/report_campaign_manager.py"),
     ("🏆 Fund Rankings",         "pages/view winrich fund ranks.py"),
-    ("🔗 Benchmark Mapping",     "pages/view_fund__benchmark_mapping.py"),
-    ("📈 NSE Indices",           "pages/view_NSE_indices.py"),
+    ("🔗 Benchmark Mapping",     "pages/fund__benchmark_mapping.py"),
+    ("📈 NSE Indices",           "pages/manage_NSE_indices.py"),
 ]
 
 # Pages only visible to admins
 _ADMIN_PAGES = [
-    ("⚙️ Configuration",        "pages/manage_config.py"),
+    ("⚙️ Configuration",        "pages/config_editor.py"),
 ]
 
 

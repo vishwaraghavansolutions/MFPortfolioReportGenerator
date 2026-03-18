@@ -33,7 +33,7 @@ Dependency graph
         ├── MutualFundBenchmarkAgent    (SEBI benchmark name per fund)
         ├── IndexAgent                  (actual return values per benchmark)
         ├── FundRankingAgent            (WinRich rank within category)
-        ├── MFPortfolioPDFGenerator     (PDF rendering)
+        ├── chMFPortfolioPDFGenerator     (PDF rendering)
         └── generate_ai_commentary      (Claude API)
 
 Skills (public)
@@ -55,7 +55,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+import calendar
+from datetime import datetime, date as date_type
 from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
@@ -66,6 +67,7 @@ from agents.mf_benchmark_agent import MutualFundBenchmarkAgent
 from agents.index_agent import IndexAgent
 from agents.mf_funds_ranking_agent import FundRankingAgent
 from agents.gcs_storage_agent import GCSStorageAgent
+from agents.nse_benchmark_agent import NSEBenchmarkAgent, BROAD_MARKET_INDICES
 
 from utils.mf_portfolio_pdf_generator import (
     MFPortfolioPDFGenerator,
@@ -91,6 +93,187 @@ _BENCHMARK_RETURN_COLS = [
     "benchmark_return_3yr",
     "benchmark_return_5yr",
 ]
+
+# Calendar-day lookback for each return column
+_LOOKBACK_DAYS: Dict[str, int] = {
+    "benchmark_return_1m":  30,
+    "benchmark_return_3m":  90,
+    "benchmark_return_1yr": 365,
+    "benchmark_return_3yr": 1095,
+    "benchmark_return_5yr": 1825,
+}
+
+# Possible column names for date / closing value in the NSE index CSV
+_NSE_DATE_COLS  = ["Index Date", "Date", "date"]
+_NSE_CLOSE_COLS = ["Closing Index Value", "Close", "Closing Value", "close"]
+
+# If the nearest available past-date is more than this many days before the
+# expected lookback date, the data has a gap (e.g. an entire year is missing
+# from GCS) and the return is misleading — return None instead.
+_MAX_PAST_DATE_GAP = 45  # calendar days
+
+# Suffixes that SEBI appends to benchmark names but NSE index names don't have
+_SEBI_SUFFIXES = (
+    " TOTAL RETURN INDEX", " TRI", " TOTAL RETURN",
+    " PRICE RETURN INDEX", " PRI", " INDEX",
+)
+
+
+def _normalize_to_nse_index(benchmark: str) -> Optional[str]:
+    """
+    Map a SEBI benchmark name to the nearest entry in BROAD_MARKET_INDICES.
+    Returns None if no match is found.
+
+    Examples
+    --------
+    "Nifty 50 TRI"                   → "NIFTY 50"
+    "NIFTY MIDCAP 150 Total Return"  → "NIFTY MIDCAP 150"
+    "S&P BSE SENSEX"                 → None
+    """
+    if not benchmark:
+        return None
+    name = benchmark.upper().strip()
+    for suffix in _SEBI_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)].strip()
+    # 1. Exact match
+    if name in BROAD_MARKET_INDICES:
+        return name
+    # 2. One contains the other (handles minor spacing/wording differences)
+    for idx in BROAD_MARKET_INDICES:
+        if idx in name or name in idx:
+            return idx
+    return None
+
+
+def _find_col(df: "pd.DataFrame", candidates: List[str]) -> Optional[str]:
+    """Return the first candidate column name that exists in df."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _calc_return(
+    nse_df: "pd.DataFrame",
+    index_name: str,
+    as_of_date: "date_type",
+    lookback_days: int,
+) -> Optional[float]:
+    """
+    Return the % return for *index_name* over *lookback_days* calendar days
+    ending on *as_of_date*. Nearest prior trading day used for both endpoints.
+
+    return = (close_as_of_date − close_lookback) / close_lookback × 100
+    """
+    import pandas as pd
+
+    sub = nse_df[nse_df["index_name"] == index_name]
+    if sub.empty:
+        logger.warning(
+            "_calc_return: index %r not found in nse_df. "
+            "Available indices: %s",
+            index_name,
+            list(nse_df["index_name"].unique()) if "index_name" in nse_df.columns else "no index_name col",
+        )
+        return None
+    sub = sub.copy()
+
+    logger.debug(sub.head(10))
+    date_col  = _find_col(sub, _NSE_DATE_COLS)
+    logger.debug("Date column candidates: %s  found: %s", _NSE_DATE_COLS, date_col)
+    close_col = _find_col(sub, _NSE_CLOSE_COLS)
+    logger.debug("Close column candidates: %s  found: %s", _NSE_CLOSE_COLS, close_col)
+    if date_col is None or close_col is None:
+        logger.warning(
+            "_calc_return: could not find date/close columns. cols=%s",
+            list(sub.columns),
+        )
+        return None
+
+    sub[date_col]  = pd.to_datetime(sub[date_col], dayfirst=True, errors="coerce")
+    sub[close_col] = pd.to_numeric(sub[close_col].astype(str).str.replace(",", ""), errors="coerce")
+    sub = sub.dropna(subset=[date_col, close_col]).sort_values(date_col)
+
+    as_of_ts    = pd.Timestamp(as_of_date)
+    lookback_ts = as_of_ts - pd.Timedelta(days=lookback_days)
+
+    data_min = sub[date_col].min()
+    data_max = sub[date_col].max()
+
+    recent = sub[sub[date_col] <= as_of_ts]
+    past   = sub[sub[date_col] <= lookback_ts]
+
+    if recent.empty:
+        logger.warning(
+            "_calc_return(%r, lookback=%dd): no rows ≤ as_of %s. data range %s → %s",
+            index_name, lookback_days, as_of_ts.date(), data_min.date() if pd.notna(data_min) else "?", data_max.date() if pd.notna(data_max) else "?",
+        )
+        return None
+
+    if past.empty:
+        logger.warning(
+            "_calc_return(%r, lookback=%dd): no rows ≤ %s (need data from ~%s). "
+            "Earliest available: %s. Download that year's index data to GCS.",
+            index_name, lookback_days, lookback_ts.date(),
+            lookback_ts.date(), data_min.date() if pd.notna(data_min) else "?",
+        )
+        return None
+
+    close_now  = float(recent.iloc[-1][close_col])
+    close_past = float(past.iloc[-1][close_col])
+    recent_date = recent.iloc[-1][date_col]
+    past_date   = past.iloc[-1][date_col]
+
+    # Guard against data gaps: if the nearest available past date is far
+    # before the expected lookback date, an entire year is missing from GCS
+    # and the result would silently reuse a stale value (e.g. both 3M and
+    # 1YR landing on the same 2024-12-31 row when 2025 data is absent).
+    gap_days = (lookback_ts - pd.Timestamp(past_date)).days
+    if gap_days > _MAX_PAST_DATE_GAP:
+        logger.warning(
+            "_calc_return(%r, lookback=%dd): past date %s is %d days before "
+            "expected %s — data gap detected. "
+            "Download %d index data to GCS and retry.",
+            index_name, lookback_days,
+            pd.Timestamp(past_date).date(), gap_days, lookback_ts.date(),
+            lookback_ts.year,
+        )
+        return None
+
+    logger.debug(
+        "_calc_return(%r, lookback=%dd): close_now=%.2f on %s, close_past=%.2f on %s",
+        index_name, lookback_days,
+        close_now, pd.Timestamp(recent_date).date(),
+        close_past, pd.Timestamp(past_date).date(),
+    )
+
+    if pd.isna(close_now) or pd.isna(close_past):
+        return None
+
+    if close_past == 0:
+        return None
+
+    actual_days = (pd.Timestamp(recent_date) - pd.Timestamp(past_date)).days
+    if actual_days <= 0:
+        return None
+
+    if lookback_days < 365:
+        # Absolute point-to-point return for sub-1-year periods (1M, 3M)
+        result = (close_now - close_past) / close_past * 100
+    else:
+        # CAGR for 1Y, 3Y, 5Y — annualised using actual calendar days
+        years  = actual_days / 365.0
+        result = ((close_now / close_past) ** (1.0 / years) - 1) * 100
+
+    logger.debug(
+        "_calc_return(%r, lookback=%dd, actual=%dd): %.2f → %.2f  %s = %.2f%%",
+        index_name, lookback_days, actual_days,
+        close_past, close_now,
+        "CAGR" if lookback_days >= 365 else "abs",
+        result,
+    )
+    return round(result, 2)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -159,9 +342,11 @@ class MFPortfolioAgent(Agent):
         index_agent:     Optional[IndexAgent]                  = None,
         ranking_agent:   Optional[FundRankingAgent]            = None,
         gcs_agent:       Optional[GCSStorageAgent]             = None,
+        nse_agent:       Optional[NSEBenchmarkAgent]           = None,
     ):
         self._data_agent      = data_agent
         self._benchmark_agent = benchmark_agent
+        self._nse_agent       = nse_agent
         self._index_agent     = index_agent
         self._ranking_agent   = ranking_agent
         self._gcs_agent       = gcs_agent
@@ -187,6 +372,11 @@ class MFPortfolioAgent(Agent):
         if self._ranking_agent is None:
             self._ranking_agent = FundRankingAgent()
         return self._ranking_agent
+
+    def _get_nse_agent(self) -> NSEBenchmarkAgent:
+        if self._nse_agent is None:
+            self._nse_agent = NSEBenchmarkAgent()
+        return self._nse_agent
 
     def _get_gcs_agent(self) -> GCSStorageAgent:
         if self._gcs_agent is None:
@@ -239,21 +429,24 @@ class MFPortfolioAgent(Agent):
 
     def _enrich_benchmarks(self, params: Dict[str, Any]) -> AgentResponse:
         """
-        Resolve SEBI benchmark name and return metrics for every fund row.
-
-        Resolution order per fund:
-          1. MutualFundBenchmarkAgent.get_fund_benchmark(scheme_code)
-          2. IndexAgent.get_benchmark_values(benchmark_name)
-          3. All columns set to None  (PDF shows N/A)
+        For every fund row:
+          1. Call MFBenchmarkAgent.get_fund_benchmark(scheme_code) → benchmark name
+          2. Normalize the SEBI benchmark name → NSE Broad Market Index name
+          3. Load {year}_Index_Master.csv from GCS (winrich_shared/Master)
+          4. Calculate return columns from the index closing values:
+               return = (close_as_of_date − close_N_business_days_ago) / close_N × 100
+             where N = 30 / 90 / 365 / 1095 / 1825 calendar days (nearest prior
+             trading day used for both endpoints).
 
         Required params
         ---------------
           customer_df  : pd.DataFrame
-          parquet_dir  : str
 
         Optional params
         ---------------
-          year, month  : int
+          as_of_date   : datetime | date | str  – passed from portfolio_agent
+                         (falls back to year/month, then today)
+          year, month  : int   – used only when as_of_date is absent
 
         Output keys
         -----------
@@ -264,115 +457,213 @@ class MFPortfolioAgent(Agent):
         if customer_df is None:
             return AgentResponse(AgentStatus.FAILED, error="'customer_df' is required")
 
-        parquet_dir = params.get("parquet_dir", "data")
-        year        = params.get("year")
-        month       = params.get("month")
+        # ── Determine as-of date (prefer explicit param, then year/month, then today)
+        raw_as_of = params.get("as_of_date")
+        if raw_as_of is not None:
+            try:
+                as_of_date = pd.Timestamp(raw_as_of).date()
+            except Exception:
+                as_of_date = date_type.today()
+        else:
+            year  = params.get("year")
+            month = params.get("month")
+            if year and month:
+                last_day   = calendar.monthrange(int(year), int(month))[1]
+                as_of_date = date_type(int(year), int(month), last_day)
+            else:
+                as_of_date = date_type.today()
 
-        try:
-            index_agent = self._get_index_agent()
-            if index_agent.store.is_empty():
-                index_agent.run(
-                    "load_index_files",
-                    {"parquet_dir": parquet_dir, "force_reload": False},
-                )
-        except Exception as exc:
-            import traceback as _tb
-            return AgentResponse(
-                AgentStatus.FAILED,
-                error=f"IndexAgent setup failed: {type(exc).__name__}: {exc}",
-                metadata={"traceback": _tb.format_exc()},
+        # ── Load NSE index data from GCS (all years needed for 5yr lookback) ──
+        years_needed = list(range(as_of_date.year - 5, as_of_date.year + 1))
+        gcs_agent    = self._get_gcs_agent()
+        nse_dfs: List[pd.DataFrame] = []
+        nse_load_errors: List[str]  = []
+
+        for yr in years_needed:
+            resp = gcs_agent.run("load_ranking_csv", {
+                "filename":    f"{yr}_Index_Master.csv",
+                "bucket_name": "winrich_shared",
+                "prefix":      "Master",
+            })
+            if resp.status == AgentStatus.SUCCESS:
+                nse_dfs.append(resp.output["dataframe"])
+            else:
+                nse_load_errors.append(f"{yr}: {resp.error}")
+
+        nse_df: Optional[pd.DataFrame] = (
+            pd.concat(nse_dfs, ignore_index=True) if nse_dfs else None
+        )
+        if nse_load_errors:
+            logger.warning(
+                "[enrich_benchmarks] Missing NSE index files in GCS (%d/%d years): %s. "
+                "Run NSEBenchmarkAgent.download_index_data for those years to populate GCS.",
+                len(nse_load_errors), len(years_needed), nse_load_errors,
             )
 
-        try:
-            benchmark_agent = self._get_benchmark_agent()
-        except Exception as exc:
-            import traceback as _tb
-            return AgentResponse(
-                AgentStatus.FAILED,
-                error=f"BenchmarkAgent setup failed: {type(exc).__name__}: {exc}",
-                metadata={"traceback": _tb.format_exc()},
-            )
+        # ── Per-fund enrichment ───────────────────────────────────────────────
+        benchmark_agent = self._get_benchmark_agent()
+        enriched_rows: List[dict]       = []
+        summary:       Dict[str, Any]   = {}
 
-        enriched_rows = []
-        summary: Dict[str, Any] = {}
+        logger.debug(
+            "[enrich_benchmarks] as_of_date=%s  nse_data=%s rows=%d  funds=%d",
+            as_of_date,
+            "loaded" if nse_df is not None else "MISSING",
+            len(nse_df) if nse_df is not None else 0,
+            len(customer_df),
+        )
+        logger.debug("[enrich_benchmarks] customer_df columns: %s", list(customer_df.columns))
+        logger.debug("[enrich_benchmarks] first row sample:\n%s", customer_df.iloc[0].to_dict() if len(customer_df) > 0 else "empty")
 
         for _, row in customer_df.iterrows():
-            fund_name   = str(row.get("s_name", ""))
-            scheme_code = row.get("scheme_code")
+            fund_name = str(row.get("s_name", "")).strip()
 
-            outcome = {
+            logger.debug("[enrich_benchmarks] ── fund: %r", fund_name)
+
+            outcome: Dict[str, Any] = {
                 "fund":           fund_name,
-                "scheme_code":    scheme_code,
                 "benchmark_name": None,
+                "nse_index":      None,
                 "source":         "N/A",
                 "error":          None,
             }
 
-            benchmark_name    = None
-            scheme_category   = None
+            benchmark_name:  Optional[str]   = None
+            scheme_category: Optional[str]   = None
+            nse_index_name:  Optional[str]   = None
             return_values: Dict[str, Optional[float]] = {c: None for c in _BENCHMARK_RETURN_COLS}
 
-            if scheme_code is not None:
+            # Step 1 – look up SEBI benchmark by fund name via mf_benchmark_agent
+            if fund_name:
                 try:
                     bm_resp = benchmark_agent.run(
-                        "get_fund_benchmark",
-                        {"scheme_code": int(scheme_code)},
+                        "lookup_benchmark_by_name",
+                        {"fund_name": fund_name, "exact": False},
                     )
                     if bm_resp.status == AgentStatus.SUCCESS:
-                        benchmark_name  = bm_resp.output.get("benchmark")
-                        scheme_category = bm_resp.output.get("scheme_category")
-                        outcome["benchmark_name"] = benchmark_name
+                        matches = bm_resp.output.get("matches") or []
+                        if matches:
+                            # Exclude IDCW variants; keep only Growth rows
+                            growth_matches = [
+                                m for m in matches
+                                if "idcw" not in str(m.get("scheme_name") or "").lower()
+                            ]
+                            candidates = growth_matches if growth_matches else matches
+
+                            # Among candidates, prefer the one whose full scheme_name
+                            # most closely matches fund_name (highest char-overlap)
+                            fn_lower = fund_name.lower()
+                            def _similarity(m: dict) -> int:
+                                sn = str(m.get("scheme_name") or "").lower()
+                                return sum(1 for c in fn_lower if c in sn)
+                            best = max(candidates, key=_similarity)
+
+                            raw_bm = str(best.get("benchmark") or "").strip()
+                            # Treat _derive_benchmark sentinel values as unmapped
+                            if raw_bm.lower().startswith("benchmark not mapped"):
+                                raw_bm = ""
+                            benchmark_name  = raw_bm or None
+                            scheme_category = str(best.get("scheme_category") or "").strip() or None
+                            outcome["benchmark_name"] = benchmark_name
+                            logger.debug(
+                                "[enrich_benchmarks]   step1 OK  matched=%r  benchmark=%r  category=%r",
+                                best.get("scheme_name"), benchmark_name, scheme_category,
+                            )
+                        else:
+                            outcome["error"] = f"lookup_benchmark_by_name: no matches for '{fund_name}'"
+                            logger.debug("[enrich_benchmarks]   step1 FAIL  no matches for %r", fund_name)
                     else:
                         outcome["error"] = f"MFBenchmarkAgent: {bm_resp.error}"
+                        logger.debug("[enrich_benchmarks]   step1 FAIL  %s", bm_resp.error)
                 except Exception as exc:
                     outcome["error"] = f"MFBenchmarkAgent exception: {exc}"
+                    logger.debug("[enrich_benchmarks]   step1 EXC  %s", exc)
+            else:
+                logger.debug("[enrich_benchmarks]   step1 SKIP  empty fund_name")
 
-            if benchmark_name and not index_agent.store.is_empty():
+            # Step 2 – normalize to NSE index name
+            if benchmark_name:
+                nse_index_name = _normalize_to_nse_index(benchmark_name)
+                outcome["nse_index"] = nse_index_name
+                logger.debug(
+                    "[enrich_benchmarks]   step2 normalize  %r → %r",
+                    benchmark_name, nse_index_name,
+                )
+            else:
+                logger.debug("[enrich_benchmarks]   step2 SKIP  no benchmark_name")
+
+            # Step 3 – calculate returns from NSE index data
+            # Each period is only calculated when the folio is old enough for it.
+            if nse_index_name and nse_df is not None:
                 try:
-                    idx_params: Dict[str, Any] = {
-                        "benchmark": benchmark_name,
-                        "metrics":   _BENCHMARK_RETURN_COLS,
-                    }
-                    if year  is not None: idx_params["year"]  = year
-                    if month is not None: idx_params["month"] = month
-
-                    idx_resp = index_agent.run("get_benchmark_values", idx_params)
-
-                    if idx_resp.status == AgentStatus.SUCCESS:
-                        metrics_out = idx_resp.output.get("metrics", {})
-                        for col in _BENCHMARK_RETURN_COLS:
-                            return_values[col] = metrics_out.get(col)
-                        outcome["source"] = "MFBenchmarkAgent+IndexAgent"
-                    else:
-                        outcome["error"] = (
-                            (outcome["error"] or "") +
-                            f" | IndexAgent: {idx_resp.error}"
-                        )
-                except Exception as exc:
-                    outcome["error"] = (
-                        (outcome["error"] or "") +
-                        f" | IndexAgent exception: {exc}"
+                    # Parse folio start date from customer_df
+                    folio_raw = row.get("FolioStartDate")
+                    folio_date: Optional[date_type] = None
+                    if folio_raw is not None:
+                        try:
+                            folio_date = pd.Timestamp(folio_raw).date()
+                        except Exception:
+                            pass
+                    logger.debug(
+                        "[enrich_benchmarks]   step3 folio_date=%s  index=%r",
+                        folio_date, nse_index_name,
                     )
 
+                    for col in _BENCHMARK_RETURN_COLS:
+                        lookback = _LOOKBACK_DAYS[col]
+                        # Skip this period if the folio is younger than the lookback
+                        if folio_date is not None:
+                            min_start = (pd.Timestamp(as_of_date) - pd.Timedelta(days=lookback)).date()
+                            if folio_date > min_start:
+                                return_values[col] = None
+                                logger.debug(
+                                    "[enrich_benchmarks]   step3 %s SKIP  folio %s > min_start %s",
+                                    col, folio_date, min_start,
+                                )
+                                continue
+                        val = _calc_return(nse_df, nse_index_name, as_of_date, lookback)
+                        return_values[col] = val
+                        logger.debug(
+                            "[enrich_benchmarks]   step3 %s = %s  (lookback=%dd)",
+                            col, val, lookback,
+                        )
+                    outcome["source"] = "MFBenchmarkAgent+NSEBenchmarkAgent"
+                except Exception as exc:
+                    outcome["error"] = (
+                        (outcome["error"] or "") + f" | NSE calc: {exc}"
+                    )
+                    logger.debug("[enrich_benchmarks]   step3 EXC  %s", exc)
+            else:
+                logger.debug(
+                    "[enrich_benchmarks]   step3 SKIP  nse_index=%r  nse_df=%s",
+                    nse_index_name, "present" if nse_df is not None else "MISSING",
+                )
+
+            # Build enriched row — preserve pre-populated values from
+            # WinrichMFDataAgent when live lookup fails.
             enriched_row = row.to_dict()
-            # Only overwrite when the API lookup actually resolved a value.
-            # Preserves pre-populated benchmark_index / scheme_category from
-            # WinrichMFDataAgent (SchemeLookup) when the live API fails.
             if benchmark_name is not None:
-                enriched_row["benchmark_index"] = benchmark_name
+                enriched_row["benchmark_index"] = re.sub(
+                    r"\bTotal Return Index\b", "TRI", benchmark_name, flags=re.IGNORECASE
+                )
             elif "benchmark_index" not in enriched_row:
                 enriched_row["benchmark_index"] = None
             if scheme_category is not None:
                 enriched_row["scheme_category"] = scheme_category
             elif "scheme_category" not in enriched_row:
                 enriched_row["scheme_category"] = None
-            enriched_row["benchmark_source"] = outcome["source"]
+            enriched_row["benchmark_source"]  = outcome["source"]
+            enriched_row["nse_index_name"]    = nse_index_name
+            # Always overwrite with NSE-computed values (or None → '-' in PDF).
+            # Never fall back to pre-populated WinrichMFDataAgent values.
             for col in _BENCHMARK_RETURN_COLS:
-                # Only write return values when resolved; don't zero out existing data.
-                if return_values[col] is not None:
-                    enriched_row[col] = return_values[col]
-                elif col not in enriched_row:
-                    enriched_row[col] = None
+                enriched_row[col] = return_values[col]
+
+            logger.debug(
+                "[enrich_benchmarks]   result  source=%r  returns=%s",
+                outcome["source"],
+                {c: return_values[c] for c in _BENCHMARK_RETURN_COLS},
+            )
 
             enriched_rows.append(enriched_row)
             summary[fund_name] = outcome
@@ -388,7 +679,7 @@ class MFPortfolioAgent(Agent):
             )
 
         resolved   = sum(1 for o in summary.values() if o["source"] != "N/A")
-        unresolved = sum(1 for o in summary.values() if o["source"] == "N/A")
+        unresolved = len(summary) - resolved
 
         return AgentResponse(
             AgentStatus.SUCCESS,
@@ -397,9 +688,12 @@ class MFPortfolioAgent(Agent):
                 "enrichment_summary": summary,
             },
             metadata={
-                "total_funds":  len(enriched_rows),
-                "resolved":     resolved,
-                "unresolved":   unresolved,
+                "total_funds":      len(enriched_rows),
+                "resolved":         resolved,
+                "unresolved":       unresolved,
+                "as_of_date":       str(as_of_date),
+                "nse_data_loaded":  nse_df is not None,
+                "nse_rows":         len(nse_df) if nse_df is not None else 0,
             },
         )
 

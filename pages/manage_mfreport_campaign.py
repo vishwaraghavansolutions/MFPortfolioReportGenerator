@@ -29,6 +29,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+from utils.auth import require_login
+from utils.navbar import navbar
+require_login()
+
 # ── Inject Google Font + custom CSS ───────────────────────────────────────────
 st.markdown("""
 <style>
@@ -891,6 +895,7 @@ campaign_params = {
 # Main area — Header
 # ══════════════════════════════════════════════════════════════════════════════
 
+navbar()
 st.markdown("## 📊 MF Portfolio Report Campaign")
 
 phase_map = {
