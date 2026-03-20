@@ -8,3 +8,4 @@ data/*.xlsx
 pages/__pycache__/
 pages/*.pyx
 reports/*
+data/debug*
