@@ -784,7 +784,7 @@ with tab_ref:
             "Gilt Fund","Gilt Fund with 10 year constant duration","Floater Fund",
         ],
         "Passive / Index / FoF": [
-            "Index Fund","ETF","Fund of Fund","FoF",
+            "Index Fund","ETF",
         ],
     }
 
@@ -811,16 +811,74 @@ with tab_ref:
                 f'{rows_html}</div>',
                 unsafe_allow_html=True)
 
+    # ── FoF resolved benchmark reference ─────────────────────────────────────
+    _FOF_REFERENCE = {
+        "Domestic FoF": [
+            ("Gold ETF FoF",                        "Domestic Price of Gold"),
+            ("Silver ETF FoF",                      "Domestic Price of Silver"),
+            ("Gold + Silver FoF",                   "50% Domestic Price of Gold + 50% Domestic Price of Silver"),
+            ("Aggressive Hybrid FoF",               "NIFTY 50 Hybrid Composite Debt 75:25 Index"),
+            ("Conservative Hybrid FoF",             "NIFTY 50 Hybrid Composite Debt 15:85 Index"),
+            ("Dynamic Asset Allocation / BAF FoF",  "NIFTY 50 Hybrid Composite Debt 50:50 Index"),
+            ("Arbitrage / Income Plus Arb FoF",     "Nifty 50 Arbitrage Index"),
+            ("Multi Asset FoF",                     "NIFTY 500 Total Return Index"),
+            ("Flexi Cap / Diversified Equity FoF",  "NIFTY 500 Total Return Index"),
+            ("BHARAT Bond FoF (year-specific)",     "Nifty BHARAT Bond Index – April {year}"),
+            ("Nifty 50 ETF FoF",                    "NIFTY 50 Total Return Index"),
+            ("Nifty Next 50 / Junior BeES FoF",     "NIFTY Next 50 Total Return Index"),
+            ("Specific Index ETF FoF",              "Underlying Nifty / BSE Index (name-resolved)"),
+        ],
+        "Overseas FoF": [
+            ("US Equity FoF",                       "S&P 500 Total Return Index"),
+            ("NASDAQ FoF",                          "NASDAQ-100 Total Return Index"),
+            ("Global Emerging Markets FoF",         "MSCI Emerging Markets Index (Total Return)"),
+            ("Global / World Equity FoF",           "MSCI All Country World Index (Total Return)"),
+            ("Greater China FoF",                   "MSCI China Index (Total Return)"),
+            ("Europe FoF",                          "MSCI Europe Index (Total Return)"),
+            ("Asia Pacific FoF",                    "MSCI AC Asia Pacific ex Japan Index (Total Return)"),
+            ("World Gold Mining FoF",               "NYSE Arca Gold Miners Index"),
+            ("Global Clean Energy FoF",             "S&P Global Clean Energy Index"),
+            ("Global Agribusiness FoF",             "S&P Global Agribusiness Equity Index"),
+            ("Water / Aqua FoF",                    "S&P Global Water Index"),
+            ("REIT FoF",                            "FTSE EPRA/NAREIT Asia Pacific (ex Japan) Index"),
+            ("US Treasury Debt FoF",                "Bloomberg US Treasury 0-1 Year Index"),
+            ("AI & Technology FoF",                 "Indxx Artificial Intelligence & Big Data Index"),
+            ("Electric / Autonomous Vehicles FoF",  "Solactive Autonomous & Electric Vehicles Index"),
+        ],
+    }
+
+    st.markdown('<div class="bm-group-head">Fund of Funds — Name-Resolved Benchmarks</div>',
+                unsafe_allow_html=True)
+
+    fof_col_a, fof_col_b = st.columns(2)
+    for col_idx, (group, entries) in enumerate(_FOF_REFERENCE.items()):
+        col = fof_col_a if col_idx == 0 else fof_col_b
+        with col:
+            rows_html = "".join(
+                f'<div class="bm-row">'
+                f'<span class="bm-cat">{cat}</span>'
+                f'<span class="bm-idx">{idx}</span>'
+                f'</div>'
+                for cat, idx in entries
+            )
+            st.markdown(
+                f'<div class="bm-group-head">{group}</div>'
+                f'<div style="background:#131f2e;border:1px solid #1e3a5f;'
+                f'border-radius:8px;overflow:hidden;padding:0 0.5rem;margin-bottom:1.2rem">'
+                f'{rows_html}</div>',
+                unsafe_allow_html=True)
+
     st.markdown("""
     <div class="callout" style="margin-top:0.5rem">
       <strong>Notes on the mapping</strong><br>
       • <em>Sectoral / Thematic</em> and <em>Sectoral/Thematic</em> are listed separately because
         mfapi.in returns both spellings depending on the AMC; both resolve to NIFTY 500 TRI.<br>
       • <em>Index Fund</em> and <em>ETF</em> map to <em>Underlying Index</em> — these are
-        pass-through entries; the actual index is fund-specific and should be overridden in the
-        parquet file after inspection.<br>
-      • <em>Fund of Fund</em> maps to the Tier-1 benchmark of its underlying fund, which again
-        requires a manual lookup.<br>
+        pass-through entries; the actual index is fund-specific.<br>
+      • <em>Fund of Fund</em> benchmarks are now <strong>name-resolved</strong> via
+        <code>_resolve_fof_benchmark()</code> — each FoF scheme's actual benchmark is derived
+        from keywords in the fund name (e.g. "Gold" → Domestic Price of Gold, "Aggressive Hybrid"
+        → NIFTY 50 Hybrid Composite Debt 75:25 Index). See the table above for the full mapping.<br>
       • Source: <strong>SEBI Circular SEBI/HO/IMD/IMD-I/DOF6/P/CIR/2021/626</strong>,
         dated 4 October 2021.
     </div>

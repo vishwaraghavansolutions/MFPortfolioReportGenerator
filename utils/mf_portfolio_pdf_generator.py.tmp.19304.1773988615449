@@ -362,40 +362,25 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
                 "benchmark_return_5yr": None, "winrich_rank": "N/A",
             })
 
-    # ── Build reliable equity / hybrid name sets from the passed lists ───────
-    # These are already correctly classified by the metrics pipeline and power
-    # the portfolio snapshot table — use them as the primary classifier rather
-    # than relying on the 'nature' field which may be absent on all_funds rows.
-    _equity_names = {f["name"] for f in (d.get("equity_funds") or [])}
-    _hybrid_names = {f["name"] for f in (d.get("hybrid_funds") or [])}
+    # ── Map nature values → display section headings ──────────────────────────
+    # "Balance" is the raw Nature value for hybrid funds in the data warehouse
+    _NATURE_TO_HEADING = {
+        "equity":  "Your Equity Funds",
+        "balance": "Your Hybrid Funds",
+        "hybrid":  "Your Hybrid Funds",
+        "debt":    "Your Debt Funds",
+    }
 
     def _fund_heading(fund: dict) -> str:
-        name = fund.get("name", "")
-        if name in _equity_names:
-            return "Your Equity Funds"
-        if name in _hybrid_names:
-            return "Your Hybrid Funds"
-        # Remaining funds: classify by nature then by benchmark index name then by fund name
         nature = str(fund.get("nature", "")).strip().lower()
-        if "debt" in nature:
-            return "Your Debt Funds"
+        if nature in _NATURE_TO_HEADING:
+            return _NATURE_TO_HEADING[nature]
+        # FoF / Gold / Silver / Other — classify by benchmark name
         bench = str(fund.get("benchmark_index", "")).lower()
         if "gold" in bench or "silver" in bench:
             return "Your Gold & Silver Funds"
-        if "debt" in bench or "bond" in bench or "gilt" in bench or "liquid" in bench:
-            return "Your Debt Funds"
-        # Last resort: infer from fund name keywords (handles stale/missing benchmark_index)
-        name_lower = name.lower()
-        if "gold" in name_lower or "silver" in name_lower:
-            return "Your Gold & Silver Funds"
-        if ("debt" in name_lower or "bond" in name_lower or "gilt" in name_lower
-                or "liquid" in name_lower or "overnight" in name_lower
-                or "money market" in name_lower or "ultra short" in name_lower
-                or "low duration" in name_lower or "short duration" in name_lower
-                or "medium duration" in name_lower or "long duration" in name_lower
-                or "credit risk" in name_lower or "banking and psu" in name_lower
-                or "corporate bond" in name_lower or "floater" in name_lower):
-            return "Your Debt Funds"
+        if "fof" in nature or "fund of fund" in nature or "overseas" in bench:
+            return "Your Other Funds"
         return "Your Other Funds"
 
     # ── Group funds by section heading ────────────────────────────────────────
@@ -513,45 +498,23 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
 def _parse_commentary(raw):
     headings = [
-        # Fixed headings
-        "How Your Portfolio Has Done Overall",
-        "Key Observations",
-        "Portfolio Overview",
-        "Quarter in Review",
-        # Fund-category headings (dynamic — must list all possible variants)
-        "Your Equity Funds",
-        "Your Hybrid Funds",
-        "Your Hybrid Fund",
-        "Your Debt Funds",
-        "Your Debt Fund",
-        "Your Gold & Silver Funds",
-        "Your Gold & Silver Fund",
-        "Your Gold and Silver Funds",
-        "Your Other Funds",
-        "Your Other Fund",
-        # Legacy / fallback
-        "Equity Portfolio",
-        "Hybrid Portfolio",
-        "Debt Portfolio",
+        "How Your Portfolio Has Done Overall","Your Equity Funds",
+        "Your Hybrid Fund","Your Hybrid Funds","Key Observations",
+        "Portfolio Overview","Equity Portfolio","Hybrid Portfolio","Quarter in Review",
     ]
     blocks, cur_h, cur_b = [], None, []
     for line in raw.splitlines():
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         matched = next((h for h in headings if line.lower().startswith(h.lower())), None)
         if matched:
-            if cur_h and cur_b:
-                blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
-            cur_h = matched
-            cur_b = []
+            if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
+            cur_h=matched; cur_b=[]
             rest = line[len(matched):].strip().lstrip(':').strip()
-            if rest:
-                cur_b.append(rest)
+            if rest: cur_b.append(rest)
         elif cur_h:
             cur_b.append(line)
-    if cur_h and cur_b:
-        blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
+    if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
     return blocks
 
 

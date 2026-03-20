@@ -12,6 +12,5 @@ Public API
 from .mf_benchmark_agent   import MutualFundBenchmarkAgent
 from .index_agent          import IndexAgent
 from .nse_benchmark_agent  import NSEBenchmarkAgent
-from .angelone_cdp_agent   import AngelOneCDPAgent
 
-__all__ = ["MutualFundBenchmarkAgent", "IndexAgent", "NSEBenchmarkAgent", "AngelOneCDPAgent"]
+__all__ = ["MutualFundBenchmarkAgent", "IndexAgent", "NSEBenchmarkAgent"]

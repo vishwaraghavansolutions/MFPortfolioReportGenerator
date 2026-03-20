@@ -186,8 +186,225 @@ _BENCHMARK_MAP: List[tuple] = [
     ("FoF",                                      "Tier-1 Benchmark of Underlying Fund"),
 ]
 
-def _derive_benchmark(category: str) -> str:
+
+def _resolve_fof_benchmark(scheme_name: str) -> str:
+    """
+    Resolve the actual benchmark index for a Fund-of-Fund scheme by matching
+    keywords in the fund name (most-specific patterns checked first).
+    Returns "Tier-1 Benchmark of Underlying Fund" when no pattern matches.
+    """
+    n = scheme_name.lower()
+
+    # ── BHARAT Bond (check maturity year before generic bond keywords) ──────
+    if "bharat bond" in n:
+        for year, label in [
+            ("2033", "April 2033"), ("2032", "April 2032"),
+            ("2031", "April 2031"), ("2030", "April 2030"),
+            ("2025", "April 2025"), ("2023", "April 2023"),
+        ]:
+            if year in n:
+                return f"Nifty BHARAT Bond Index – {label}"
+        return "Nifty BHARAT Bond Index"
+
+    # ── Gold + Silver combo (before individual gold / silver) ───────────────
+    if ("gold" in n and "silver" in n) or "gold and silver" in n:
+        return "50% Domestic Price of Gold + 50% Domestic Price of Silver"
+
+    # ── Gold ────────────────────────────────────────────────────────────────
+    if "gold" in n and "world gold" not in n and "gold mining" not in n:
+        return "Domestic Price of Gold"
+
+    # ── Silver ──────────────────────────────────────────────────────────────
+    if "silver" in n:
+        return "Domestic Price of Silver"
+
+    # ── Hybrid types ────────────────────────────────────────────────────────
+    if "aggressive hybrid" in n:
+        return "NIFTY 50 Hybrid Composite Debt 75:25 Index"
+    if "conservative hybrid" in n:
+        return "NIFTY 50 Hybrid Composite Debt 15:85 Index"
+
+    # ── Arbitrage (check before dynamic asset allocation) ───────────────────
+    if "arbitrage" in n:
+        return "Nifty 50 Arbitrage Index"
+
+    # ── Dynamic Asset Allocation / Balanced Advantage ───────────────────────
+    if "dynamic asset allocation" in n or "balanced advantage" in n:
+        return "NIFTY 50 Hybrid Composite Debt 50:50 Index"
+
+    # ── Specific domestic index ETF FoFs (most-specific first) ──────────────
+    if "nifty next 50" in n or "junior bees" in n:
+        return "NIFTY Next 50 Total Return Index"
+    if "nifty 100 low volatility" in n:
+        return "NIFTY 100 Low Volatility 30 Index"
+    if "alpha low" in n or "nifty alpha low" in n:
+        return "NIFTY Alpha Low-Volatility 30 Index"
+    if "bharat 22" in n:
+        return "S&P BSE Bharat 22 Index"
+    if "nifty ev" in n or "ev & new age automotive" in n:
+        return "NIFTY EV & New Age Automotive Index"
+    if "nifty india defence" in n:
+        return "NIFTY India Defence Index"
+    if "nifty india internet" in n:
+        return "NIFTY India Internet Index"
+    if "nifty 500 momentum" in n:
+        return "NIFTY 500 Momentum 50 Index"
+    if "nifty200 alpha" in n or "nifty 200 alpha" in n:
+        return "NIFTY200 Alpha 30 Index"
+    if "nifty india manufacturing" in n or "india manufacturing" in n:
+        return "NIFTY India Manufacturing Index"
+    if "new age consumption" in n:
+        return "NIFTY India New Age Consumption Index"
+    if "nifty metal" in n:
+        return "NIFTY Metal Index"
+    if "midsmallcap400 momentum" in n:
+        return "NIFTY MidSmallcap400 Momentum Quality 100 Index"
+    if "smallcap 250 momentum" in n:
+        return "NIFTY Smallcap 250 Momentum Quality 100 Index"
+    if "bse 200 equal weight" in n:
+        return "S&P BSE 200 Equal Weight Total Return Index"
+    if "bse 500" in n:
+        return "S&P BSE 500 Total Return Index"
+    if "bse select ipo" in n:
+        return "S&P BSE IPO Index"
+    if "nifty aaa bond" in n:
+        return "Nifty AAA Bond Plus SDL Apr 2026 50:50 Index"
+    if "hang seng tech" in n:
+        return "Hang Seng TECH Index (Total Return)"
+    if "multi factor" in n:
+        return "NIFTY Alpha Quality Value Low-Volatility 30 Index"
+    if "nifty 200" in n or "nifty200" in n:
+        return "NIFTY 200 Total Return Index"
+    if "nifty 50 etf" in n or "nifty50 etf" in n:
+        return "NIFTY 50 Total Return Index"
+    if "nifty 50" in n:
+        return "NIFTY 50 Total Return Index"
+
+    # ── Multi Asset ─────────────────────────────────────────────────────────
+    if "multi asset" in n or "multi-asset" in n or "multi - asset" in n:
+        return "NIFTY 500 Total Return Index"
+
+    # ── Diversified / Flexi Cap ─────────────────────────────────────────────
+    if "flexi cap" in n or "flexicap" in n or "diversified equity" in n or "all cap" in n:
+        return "NIFTY 500 Total Return Index"
+
+    # ── Diversified Debt ────────────────────────────────────────────────────
+    if "diversified debt" in n:
+        return "NIFTY Composite Debt Index"
+
+    # ── Multi Sector / Thematic Advantage / Global Advantage ────────────────
+    if "multi sector" in n or "thematic advantage" in n or "global advantage" in n:
+        return "NIFTY 500 Total Return Index"
+
+    # ── Life Stage (Franklin) — ordered by age band ─────────────────────────
+    if "life stage" in n:
+        if "20" in n:
+            return "NIFTY 500 Total Return Index"
+        if "30" in n:
+            return "NIFTY 500 Total Return Index"
+        if "40" in n:
+            return "NIFTY 50 Hybrid Composite Debt 50:50 Index"
+        if "floating" in n:
+            return "NIFTY Low Duration Debt Index"
+        if "50" in n:
+            return "NIFTY 50 Hybrid Composite Debt 15:85 Index"
+        return "NIFTY 50 Hybrid Composite Debt 50:50 Index"
+
+    # ── Overseas / International FoFs ────────────────────────────────────────
+    # NASDAQ
+    if "nasdaq" in n or "eqqq" in n:
+        return "NASDAQ-100 Total Return Index"
+
+    # Gold Mining / World Gold (overseas)
+    if "gold mining" in n or "world gold" in n:
+        return "NYSE Arca Gold Miners Index"
+
+    # Agriculture
+    if "agriculture" in n or "agribusiness" in n:
+        return "S&P Global Agribusiness Equity Index"
+
+    # Clean Energy
+    if "clean energy" in n:
+        return "S&P Global Clean Energy Index"
+
+    # Electric Vehicles / Autonomous
+    if "electric" in n or "autonomous vehicles" in n:
+        return "Solactive Autonomous & Electric Vehicles Index"
+
+    # Artificial Intelligence
+    if "artificial intelligence" in n:
+        return "Indxx Artificial Intelligence & Big Data Index"
+
+    # Mining (non-gold)
+    if "world mining" in n or "strategic metal" in n:
+        return "Morningstar Global Upstream Natural Resources Index"
+
+    # Water / Aqua
+    if "aqua" in n or " water" in n:
+        return "S&P Global Water Index"
+
+    # Climate Change
+    if "climate change" in n:
+        return "MSCI ACWI Climate Paris Aligned Index"
+
+    # REITs
+    if "reit" in n or "real estate" in n:
+        return "FTSE EPRA/NAREIT Asia Pacific (ex Japan) Index"
+
+    # India Defence (BSE-listed ETF in overseas category)
+    if "india defence" in n:
+        return "S&P BSE India Defence Index"
+
+    # Consumer
+    if "consumer trends" in n or "consumer opportunities" in n:
+        return "MSCI World Consumer Discretionary Index"
+
+    # Equity Income
+    if "equity income" in n:
+        return "MSCI World High Dividend Yield Index"
+
+    # Asia Pacific / ASEAN / Regional
+    if "asean" in n:
+        return "MSCI AC ASEAN Index (Total Return)"
+    if "asia pacific" in n:
+        return "MSCI AC Asia Pacific ex Japan Index (Total Return)"
+    if "greater china" in n or ("china" in n and "greater" in n):
+        return "MSCI China Index (Total Return)"
+    if "brazil" in n:
+        return "MSCI Brazil Index (Total Return)"
+    if "european" in n or "europe" in n:
+        return "MSCI Europe Index (Total Return)"
+
+    # Emerging Markets
+    if "emerging market" in n or "emerging opportunities" in n:
+        return "MSCI Emerging Markets Index (Total Return)"
+
+    # US equity / debt
+    if "us treasury" in n or "us specific debt" in n:
+        return "Bloomberg US Treasury 0-1 Year Index"
+    if "us equity" in n or "us specific equity" in n or "u.s. opportunities" in n or "us opportunities" in n:
+        return "S&P 500 Total Return Index"
+    if " us " in n or n.startswith("us ") or n.endswith(" us"):
+        return "S&P 500 Total Return Index"
+
+    # Global / World (generic)
+    if "stable equity" in n:
+        return "MSCI World Index (Total Return)"
+    if "global excellence" in n:
+        return "MSCI World Index (Total Return)"
+    if "global opportunities" in n or "global equity" in n or "world" in n:
+        return "MSCI All Country World Index (Total Return)"
+    if "innovation" in n or "global brand" in n:
+        return "MSCI All Country World Index (Total Return)"
+
+    return "Tier-1 Benchmark of Underlying Fund"
+
+
+def _derive_benchmark(category: str, scheme_name: str = "") -> str:
     cat_lower = category.lower()
+    # For FoF categories, resolve using fund name when available
+    if scheme_name and ("fund of fund" in cat_lower or "fof" in cat_lower):
+        return _resolve_fof_benchmark(scheme_name)
     for keyword, benchmark in _BENCHMARK_MAP:
         if keyword.lower() in cat_lower:
             return benchmark
@@ -283,7 +500,7 @@ def skill_get_fund_benchmark(params: Dict[str, Any]) -> AgentResponse:
         "fund_house"     : str(row.get("fund_house", "")),
         "scheme_type"    : str(row.get("scheme_type", "")),
         "scheme_category": category,
-        "benchmark"      : str(row.get("benchmark", "")) or _derive_benchmark(category),
+        "benchmark"      : str(row.get("benchmark", "")) or _derive_benchmark(category, str(row.get("scheme_name", ""))),
         "latest_nav"     : row.get("latest_nav"),
         "nav_date"       : row.get("nav_date"),
     })
@@ -323,7 +540,7 @@ def skill_get_scheme_classification(params: Dict[str, Any]) -> AgentResponse:
             "fund_house":      str(row.get("fund_house", "")),
             "scheme_type":     str(row.get("scheme_type", "")),
             "scheme_category": category,
-            "benchmark":       str(row.get("benchmark", "")) or _derive_benchmark(category),
+            "benchmark":       str(row.get("benchmark", "")) or _derive_benchmark(category, str(row.get("scheme_name", ""))),
         }
 
     # ── Bulk mode ─────────────────────────────────────────────────────────────
@@ -683,13 +900,14 @@ def skill_get_fund_benchmark_from_mfapi(params: Dict[str, Any]) -> AgentResponse
     meta      = data.get("meta", {})
     nav_entry = data.get("data", [{}])[0]
     category  = meta.get("scheme_category", "")
+    name      = meta.get("scheme_name", "")
     return AgentResponse(status=AgentStatus.SUCCESS, output={
         "scheme_code"    : meta.get("scheme_code"),
-        "scheme_name"    : meta.get("scheme_name"),
+        "scheme_name"    : name,
         "fund_house"     : meta.get("fund_house"),
         "scheme_type"    : meta.get("scheme_type"),
         "scheme_category": category,
-        "benchmark"      : _derive_benchmark(category),
+        "benchmark"      : _derive_benchmark(category, name),
         "latest_nav"     : nav_entry.get("nav"),
         "nav_date"       : nav_entry.get("date"),
     })
@@ -714,13 +932,14 @@ def skill_get_scheme_classification_from_mfapi(params: Dict[str, Any]) -> AgentR
                     continue
                 meta     = data.get("meta", {})
                 category = meta.get("scheme_category", "")
+                name     = meta.get("scheme_name", "")
                 results.append({
                     "scheme_code":     meta.get("scheme_code", code),
-                    "scheme_name":     meta.get("scheme_name", ""),
+                    "scheme_name":     name,
                     "fund_house":      meta.get("fund_house", ""),
                     "scheme_type":     meta.get("scheme_type", ""),
                     "scheme_category": category,
-                    "benchmark":       _derive_benchmark(category),
+                    "benchmark":       _derive_benchmark(category, name),
                 })
             except Exception:
                 failed.append(code)
@@ -747,15 +966,16 @@ def skill_get_scheme_classification_from_mfapi(params: Dict[str, Any]) -> AgentR
                                  error=f"mfapi returned status '{data.get('status')}' for scheme {scheme_code}.")
         meta     = data.get("meta", {})
         category = meta.get("scheme_category", "")
+        name     = meta.get("scheme_name", "")
         return AgentResponse(
             status=AgentStatus.SUCCESS,
             output={
                 "scheme_code":     meta.get("scheme_code", scheme_code),
-                "scheme_name":     meta.get("scheme_name", ""),
+                "scheme_name":     name,
                 "fund_house":      meta.get("fund_house", ""),
                 "scheme_type":     meta.get("scheme_type", ""),
                 "scheme_category": category,
-                "benchmark":       _derive_benchmark(category),
+                "benchmark":       _derive_benchmark(category, name),
             },
         )
 
@@ -806,13 +1026,14 @@ def skill_rebuild_benchmark_master(params: Dict[str, Any]) -> AgentResponse:
             meta      = data.get("meta", {})
             nav_entry = data.get("data", [{}])[0] if data.get("data") else {}
             category  = meta.get("scheme_category", "")
+            name      = meta.get("scheme_name", s.get("schemeName", ""))
             rows.append({
                 "scheme_code"    : meta.get("scheme_code", code),
-                "scheme_name"    : meta.get("scheme_name", s.get("schemeName", "")),
+                "scheme_name"    : name,
                 "fund_house"     : meta.get("fund_house", ""),
                 "scheme_type"    : meta.get("scheme_type", ""),
                 "scheme_category": category,
-                "benchmark"      : _derive_benchmark(category),
+                "benchmark"      : _derive_benchmark(category, name),
                 "latest_nav"     : nav_entry.get("nav"),
                 "nav_date"       : nav_entry.get("date"),
             })

@@ -375,7 +375,7 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
             return "Your Equity Funds"
         if name in _hybrid_names:
             return "Your Hybrid Funds"
-        # Remaining funds: classify by nature then by benchmark index name then by fund name
+        # Remaining funds: classify by nature then by benchmark index name
         nature = str(fund.get("nature", "")).strip().lower()
         if "debt" in nature:
             return "Your Debt Funds"
@@ -383,18 +383,6 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         if "gold" in bench or "silver" in bench:
             return "Your Gold & Silver Funds"
         if "debt" in bench or "bond" in bench or "gilt" in bench or "liquid" in bench:
-            return "Your Debt Funds"
-        # Last resort: infer from fund name keywords (handles stale/missing benchmark_index)
-        name_lower = name.lower()
-        if "gold" in name_lower or "silver" in name_lower:
-            return "Your Gold & Silver Funds"
-        if ("debt" in name_lower or "bond" in name_lower or "gilt" in name_lower
-                or "liquid" in name_lower or "overnight" in name_lower
-                or "money market" in name_lower or "ultra short" in name_lower
-                or "low duration" in name_lower or "short duration" in name_lower
-                or "medium duration" in name_lower or "long duration" in name_lower
-                or "credit risk" in name_lower or "banking and psu" in name_lower
-                or "corporate bond" in name_lower or "floater" in name_lower):
             return "Your Debt Funds"
         return "Your Other Funds"
 
