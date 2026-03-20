@@ -114,14 +114,15 @@ def fetch_scheme(code: int) -> Optional[Dict[str, Any]]:
         meta      = data.get("meta", {})
         nav_entry = data.get("data", [{}])[0]
         category  = meta.get("scheme_category", "")
+        name      = meta.get("scheme_name", "")
 
         return {
             "scheme_code"    : meta.get("scheme_code", code),
-            "scheme_name"    : meta.get("scheme_name", ""),
+            "scheme_name"    : name,
             "fund_house"     : meta.get("fund_house", ""),
             "scheme_type"    : meta.get("scheme_type", ""),
             "scheme_category": category,
-            "benchmark"      : _derive_benchmark(category),
+            "benchmark"      : _derive_benchmark(category, name),
             "latest_nav"     : nav_entry.get("nav"),
             "nav_date"       : nav_entry.get("date"),
             "fetched_at"     : datetime.now(timezone.utc).isoformat(),

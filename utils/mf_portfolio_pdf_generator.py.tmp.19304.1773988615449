@@ -498,45 +498,23 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
 def _parse_commentary(raw):
     headings = [
-        # Fixed headings
-        "How Your Portfolio Has Done Overall",
-        "Key Observations",
-        "Portfolio Overview",
-        "Quarter in Review",
-        # Fund-category headings (dynamic — must list all possible variants)
-        "Your Equity Funds",
-        "Your Hybrid Funds",
-        "Your Hybrid Fund",
-        "Your Debt Funds",
-        "Your Debt Fund",
-        "Your Gold & Silver Funds",
-        "Your Gold & Silver Fund",
-        "Your Gold and Silver Funds",
-        "Your Other Funds",
-        "Your Other Fund",
-        # Legacy / fallback
-        "Equity Portfolio",
-        "Hybrid Portfolio",
-        "Debt Portfolio",
+        "How Your Portfolio Has Done Overall","Your Equity Funds",
+        "Your Hybrid Fund","Your Hybrid Funds","Key Observations",
+        "Portfolio Overview","Equity Portfolio","Hybrid Portfolio","Quarter in Review",
     ]
     blocks, cur_h, cur_b = [], None, []
     for line in raw.splitlines():
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         matched = next((h for h in headings if line.lower().startswith(h.lower())), None)
         if matched:
-            if cur_h and cur_b:
-                blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
-            cur_h = matched
-            cur_b = []
+            if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
+            cur_h=matched; cur_b=[]
             rest = line[len(matched):].strip().lstrip(':').strip()
-            if rest:
-                cur_b.append(rest)
+            if rest: cur_b.append(rest)
         elif cur_h:
             cur_b.append(line)
-    if cur_h and cur_b:
-        blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
+    if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
     return blocks
 
 
