@@ -1,6 +1,6 @@
 """
 mf_portfolio_pdf_generator.py
-------------------------------
+------------------------------   
 WinRich Professional Services — Portfolio Performance Report Generator
 
 CHANGES (this version)

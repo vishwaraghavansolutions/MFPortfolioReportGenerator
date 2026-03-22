@@ -1706,7 +1706,7 @@ class MFPortfolioAgent(Agent):
 #   import logging
 #   logging.getLogger("agents.mf_portfolio_agent").setLevel(logging.DEBUG)
 #   logging.basicConfig()  # ensure a handler exists
-#
+#    
 # The debug output will show, per fund:
 #   - raw scheme_category / benchmark_index column values
 #   - resolved scheme_type and scheme_category passed to FundRankingAgent
