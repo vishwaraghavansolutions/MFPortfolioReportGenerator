@@ -1,5 +1,5 @@
 """
-scheme_lookup.py   
+scheme_lookup.py 
 ----------------
 A simple class that:
   1. Takes a string → fuzzy-matches Scheme Name in SchemeData CSV
@@ -98,11 +98,10 @@ class SchemeLookup:
         self,
         scheme_csv:   Path = SCHEME_CSV,
         mapping_json: Path = MAPPING_JSON,
-        parquet_dir:  Path = PARQUET_DIR,
     ):
         self._scheme_df   = self._load_scheme(Path(scheme_csv))
         self._mapping     = self._load_mapping(Path(mapping_json))
-        self._idx_df      = self._load_indices(Path(parquet_dir))
+        self._idx_df      = self._load_indices()
 
     # ── Loaders ───────────────────────────────────────────────────────────────
 
@@ -126,31 +125,55 @@ class SchemeLookup:
             return json.load(f)
 
     @staticmethod
-    def _load_indices(parquet_dir: Path) -> pd.DataFrame:
-        files = sorted(
-            p for p in parquet_dir.glob("*.parquet")
-            if "mapping" not in p.name
-        )
-        if not files:
-            raise FileNotFoundError(
-                f"No index parquet files found in {parquet_dir}\n"
-                "Run app.py to generate them from the NSE PDF."
-            )
-        frames = [pd.read_parquet(f) for f in files]
-        df = pd.concat(frames, ignore_index=True)
+    def _load_indices() -> pd.DataFrame:
+        import io
+        from datetime import date as _date
+        from agents.gcs_storage_agent import _get_gcs_client
 
-        for col in ["return_1m", "return_3m", "return_1yr", "return_3yr", "return_5yr"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        today = _date.today()
+        years = list(range(today.year - 5, today.year + 1))
+        _LOOKBACKS  = {"return_1m": 30, "return_3m": 90, "return_1yr": 365, "return_3yr": 1095, "return_5yr": 1825}
+        _DATE_COLS  = ["Index Date", "Date", "date"]
+        _CLOSE_COLS = ["Closing Index Value", "Close", "Closing Value", "close"]
+        _MAX_GAP    = 45
 
-        # If multiple months present, keep the most recent per index
-        if {"year", "month"}.issubset(df.columns):
-            df = (
-                df.sort_values(["year", "month"], ascending=False)
-                  .drop_duplicates("index_name")
-            )
+        client = _get_gcs_client()
+        bucket = client.bucket("winrich_shared")
+        frames = []
+        for yr in years:
+            blob = bucket.blob(f"Master/{yr}_Index_Master.csv")
+            try:
+                data = blob.download_as_bytes()
+                frames.append(pd.read_csv(io.BytesIO(data)))
+            except Exception:
+                pass
 
-        return df.reset_index(drop=True)
+        if not frames:
+            raise RuntimeError("Could not load any Index_Master CSV files from GCS.")
+
+        nse_df = pd.concat(frames, ignore_index=True)
+        date_col  = next((c for c in _DATE_COLS  if c in nse_df.columns), None)
+        close_col = next((c for c in _CLOSE_COLS if c in nse_df.columns), None)
+        nse_df["_date"]  = pd.to_datetime(nse_df[date_col],  dayfirst=True, errors="coerce")
+        nse_df["_close"] = pd.to_numeric(nse_df[close_col], errors="coerce")
+        nse_df = nse_df.dropna(subset=["_date", "_close", "index_name"])
+
+        rows = []
+        for idx_name, grp in nse_df.groupby("index_name"):
+            series    = grp.sort_values("_date").set_index("_date")["_close"]
+            as_of     = series.index.max()
+            as_of_val = series.loc[as_of]
+            row: dict = {"index_name": idx_name}
+            for col, days in _LOOKBACKS.items():
+                target     = as_of - pd.Timedelta(days=days)
+                past_dates = series.index[series.index <= target]
+                if past_dates.empty or (target - past_dates[-1]).days > _MAX_GAP:
+                    row[col] = None
+                else:
+                    row[col] = round((as_of_val - series.loc[past_dates[-1]]) / series.loc[past_dates[-1]] * 100, 2)
+            rows.append(row)
+
+        return pd.DataFrame(rows).reset_index(drop=True)
 
     # ── Core lookup ───────────────────────────────────────────────────────────
 
@@ -254,7 +277,7 @@ class SchemeLookup:
         Fetch return columns for the given index from the parquet DataFrame.
         Raises ValueError if the index is not found.
         """
-        row = self._idx_df[self._idx_df["index_name"] == index_name]
+        row = self._idx_df[self._idx_df["index_name"].str.upper() == index_name.upper()]
 
         if row.empty:
             raise ValueError(

@@ -1,6 +1,6 @@
 """
 agents/mf_portfolio_agent.py
-============================
+============================  
 MF Portfolio Agent — orchestrates the mutual-fund report pipeline.
 
 Customer data is sourced exclusively by calling WinrichMFDataAgent; this
@@ -81,6 +81,14 @@ logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logging.root.setLevel(logging.DEBUG)
 
+# Always write full untruncated debug output to a log file regardless of
+# whether Streamlit has already configured the root logger.
+_log_file = "mf_portfolio_agent.log"
+_fh = logging.FileHandler(_log_file, mode="w", encoding="utf-8")
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logging.root.addHandler(_fh)
+
 _DEFAULT_BUCKET = "winrich"
 
 _SCHEME_DF: pd.DataFrame = pd.read_csv("data/SchemeData2301262313SS.csv")
@@ -136,6 +144,8 @@ def _normalize_to_nse_index(benchmark: str) -> Optional[str]:
     for suffix in _SEBI_SUFFIXES:
         if name.endswith(suffix):
             name = name[: -len(suffix)].strip()
+    # Normalise spacing variants: "LARGE MIDCAP" → "LARGEMIDCAP", "SMALL CAP" → "SMALLCAP" etc.
+    name = re.sub(r"\b(LARGE|SMALL|MULTI|FLEXI)\s+(MIDCAP|CAP)\b", r"\1\2", name)
     # 1. Exact match
     if name in BROAD_MARKET_INDICES:
         return name
@@ -179,11 +189,9 @@ def _calc_return(
         return None
     sub = sub.copy()
 
-    logger.debug(sub.head(10))
     date_col  = _find_col(sub, _NSE_DATE_COLS)
-    logger.debug("Date column candidates: %s  found: %s", _NSE_DATE_COLS, date_col)
     close_col = _find_col(sub, _NSE_CLOSE_COLS)
-    logger.debug("Close column candidates: %s  found: %s", _NSE_CLOSE_COLS, close_col)
+    logger.debug("_calc_return(%r, %dd): date_col=%r  close_col=%r", index_name, lookback_days, date_col, close_col)
     if date_col is None or close_col is None:
         logger.warning(
             "_calc_return: could not find date/close columns. cols=%s",
@@ -512,8 +520,10 @@ class MFPortfolioAgent(Agent):
             len(nse_df) if nse_df is not None else 0,
             len(customer_df),
         )
-        logger.debug("[enrich_benchmarks] customer_df columns: %s", list(customer_df.columns))
-        logger.debug("[enrich_benchmarks] first row sample:\n%s", customer_df.iloc[0].to_dict() if len(customer_df) > 0 else "empty")
+        logger.debug(
+            "[enrich_benchmarks] fund list: %s",
+            [str(r.get("s_name", "")) for _, r in customer_df.iterrows()],
+        )
 
         for _, row in customer_df.iterrows():
             fund_name = str(row.get("s_name", "")).strip()
@@ -531,6 +541,7 @@ class MFPortfolioAgent(Agent):
             benchmark_name:  Optional[str]   = None
             scheme_category: Optional[str]   = None
             nse_index_name:  Optional[str]   = None
+            found_in_map:    bool            = False
             return_values: Dict[str, Optional[float]] = {c: None for c in _BENCHMARK_RETURN_COLS}
 
             # Step 1 – look up SEBI benchmark by fund name via mf_benchmark_agent
@@ -543,6 +554,7 @@ class MFPortfolioAgent(Agent):
                     if bm_resp.status == AgentStatus.SUCCESS:
                         matches = bm_resp.output.get("matches") or []
                         if matches:
+                            found_in_map = True
                             # Exclude IDCW variants; keep only Growth rows
                             growth_matches = [
                                 m for m in matches
@@ -550,12 +562,20 @@ class MFPortfolioAgent(Agent):
                             ]
                             candidates = growth_matches if growth_matches else matches
 
-                            # Among candidates, prefer the one whose full scheme_name
-                            # most closely matches fund_name (highest char-overlap)
-                            fn_lower = fund_name.lower()
-                            def _similarity(m: dict) -> int:
-                                sn = str(m.get("scheme_name") or "").lower()
-                                return sum(1 for c in fn_lower if c in sn)
+                            # Among candidates, prefer the one whose scheme_name
+                            # best matches fund_name by word overlap (strip plan suffixes first)
+                            _SUFFIX_RE = re.compile(
+                                r"\s*[-–]\s*(regular|direct)\s*(plan|growth)?\s*$"
+                                r"|\s*[-–]\s*(growth|idcw|dividend)\s*(option|plan)?\s*$",
+                                re.IGNORECASE,
+                            )
+                            fn_clean = _SUFFIX_RE.sub("", fund_name).strip()
+                            fn_words = set(re.split(r"[\s\-]+", fn_clean.lower()))
+                            def _similarity(m: dict) -> tuple:
+                                has_bm = 0 if not str(m.get("benchmark") or "").strip() or str(m.get("benchmark") or "").lower().startswith("benchmark not mapped") else 1
+                                sn = re.sub(r"[\s\-]+", " ", str(m.get("scheme_name") or "")).lower()
+                                sn_words = set(sn.split())
+                                return (has_bm, len(fn_words & sn_words))
                             best = max(candidates, key=_similarity)
 
                             raw_bm = str(best.get("benchmark") or "").strip()
@@ -571,26 +591,24 @@ class MFPortfolioAgent(Agent):
                             )
                         else:
                             outcome["error"] = f"lookup_benchmark_by_name: no matches for '{fund_name}'"
-                            logger.debug("[enrich_benchmarks]   step1 FAIL  no matches for %r", fund_name)
+                            logger.debug("[enrich_benchmarks] %s  step1 FAIL: no matches", fund_name)
                     else:
                         outcome["error"] = f"MFBenchmarkAgent: {bm_resp.error}"
-                        logger.debug("[enrich_benchmarks]   step1 FAIL  %s", bm_resp.error)
+                        logger.debug("[enrich_benchmarks] %s  step1 FAIL: %s", fund_name, bm_resp.error)
                 except Exception as exc:
                     outcome["error"] = f"MFBenchmarkAgent exception: {exc}"
-                    logger.debug("[enrich_benchmarks]   step1 EXC  %s", exc)
-            else:
-                logger.debug("[enrich_benchmarks]   step1 SKIP  empty fund_name")
+                    logger.debug("[enrich_benchmarks] %s  step1 EXC: %s", fund_name, exc)
 
             # Step 2 – normalize to NSE index name
             if benchmark_name:
                 nse_index_name = _normalize_to_nse_index(benchmark_name)
                 outcome["nse_index"] = nse_index_name
                 logger.debug(
-                    "[enrich_benchmarks]   step2 normalize  %r → %r",
-                    benchmark_name, nse_index_name,
+                    "[enrich_benchmarks] %s  benchmark=%r → nse_index=%r",
+                    fund_name, benchmark_name, nse_index_name,
                 )
             else:
-                logger.debug("[enrich_benchmarks]   step2 SKIP  no benchmark_name")
+                logger.debug("[enrich_benchmarks] %s  no benchmark found", fund_name)
 
             # Step 3 – calculate returns from NSE index data
             # Each period is only calculated when the folio is old enough for it.
@@ -604,11 +622,6 @@ class MFPortfolioAgent(Agent):
                             folio_date = pd.Timestamp(folio_raw).date()
                         except Exception:
                             pass
-                    logger.debug(
-                        "[enrich_benchmarks]   step3 folio_date=%s  index=%r",
-                        folio_date, nse_index_name,
-                    )
-
                     for col in _BENCHMARK_RETURN_COLS:
                         lookback = _LOOKBACK_DAYS[col]
                         # Skip this period if the folio is younger than the lookback
@@ -632,11 +645,11 @@ class MFPortfolioAgent(Agent):
                     outcome["error"] = (
                         (outcome["error"] or "") + f" | NSE calc: {exc}"
                     )
-                    logger.debug("[enrich_benchmarks]   step3 EXC  %s", exc)
+                    logger.warning("[enrich_benchmarks] %s  step3 EXC  %s", fund_name, exc)
             else:
                 logger.debug(
-                    "[enrich_benchmarks]   step3 SKIP  nse_index=%r  nse_df=%s",
-                    nse_index_name, "present" if nse_df is not None else "MISSING",
+                    "[enrich_benchmarks] %s  step3 SKIP  nse_index=%r  nse_df=%s",
+                    fund_name, nse_index_name, "present" if nse_df is not None else "MISSING",
                 )
 
             # Build enriched row — preserve pre-populated values from
@@ -646,8 +659,10 @@ class MFPortfolioAgent(Agent):
                 enriched_row["benchmark_index"] = re.sub(
                     r"\bTotal Return Index\b", "TRI", benchmark_name, flags=re.IGNORECASE
                 )
-            elif "benchmark_index" not in enriched_row:
+            elif found_in_map:
+                # Fund exists in map but has no benchmark — clear the category-level fallback.
                 enriched_row["benchmark_index"] = None
+            # else: not in map → preserve SchemeLookup's category JSON value as fallback
             if scheme_category is not None:
                 enriched_row["scheme_category"] = scheme_category
             elif "scheme_category" not in enriched_row:
@@ -861,17 +876,7 @@ class MFPortfolioAgent(Agent):
 
             scheme_type = str(row.get("scheme_type", "") or default_scheme_type).strip()
 
-            logger.debug(
-                "[enrich_fund_ranks] %-55s | "
-                "raw scheme_category=%r | raw benchmark_index=%r | "
-                "resolved scheme_type=%r | resolved scheme_category=%r | source=%s",
-                fund_name,
-                row.get("scheme_category"),
-                row.get("benchmark_index"),
-                scheme_type,
-                scheme_category,
-                sc_source,
-            )
+            logger.debug("[enrich_fund_ranks] %s  category=%r", fund_name, scheme_category)
 
             outcome = {
                 "fund":                    fund_name,
@@ -889,16 +894,10 @@ class MFPortfolioAgent(Agent):
 
             if not fund_name:
                 outcome["error"] = "empty fund_name"
-                logger.debug("[enrich_fund_ranks]   → SKIP: empty fund_name")
             elif not scheme_type:
                 outcome["error"] = "empty scheme_type"
-                logger.debug("[enrich_fund_ranks]   → SKIP: empty scheme_type")
             elif not scheme_category:
                 outcome["error"] = "scheme_category could not be resolved"
-                logger.debug(
-                    "[enrich_fund_ranks]   → SKIP: scheme_category is empty — "
-                    "add benchmark_index to _BENCH_TO_CATEGORY or pass default_scheme_category"
-                )
             else:
                 # Attempt 1: raw fund name
                 resp = ranking_agent.run("get_fund_rank", {
@@ -906,25 +905,16 @@ class MFPortfolioAgent(Agent):
                     "scheme_type":     scheme_type,
                     "scheme_category": scheme_category,
                 })
-                logger.debug(
-                    "[enrich_fund_ranks]   attempt-1 raw name → status=%s error=%s",
-                    resp.status.value, resp.error,
-                )
 
                 # Attempt 2: cleaned fund name (strip plan/growth suffixes)
                 if resp.status != AgentStatus.SUCCESS:
                     cleaned = _clean_fund_name(fund_name)
-                    logger.debug("[enrich_fund_ranks]   attempt-2 cleaned=%r", cleaned)
                     if cleaned != fund_name:
                         resp = ranking_agent.run("get_fund_rank", {
                             "fund_name":       cleaned,
                             "scheme_type":     scheme_type,
                             "scheme_category": scheme_category,
                         })
-                        logger.debug(
-                            "[enrich_fund_ranks]   attempt-2 cleaned name → status=%s error=%s",
-                            resp.status.value, resp.error,
-                        )
 
                 if resp.status == AgentStatus.SUCCESS:
                     winrich_rank           = resp.output.get("rank_label", "N/A")
@@ -932,14 +922,10 @@ class MFPortfolioAgent(Agent):
                     outcome["rank"]        = resp.output.get("rank")
                     outcome["max_rank"]    = resp.output.get("max_rank")
                     outcome["source"]      = resp.output.get("source", "ranking_file")
-                    logger.debug(
-                        "[enrich_fund_ranks]   → MATCHED: rank=%s matched_csv_name=%r",
-                        winrich_rank,
-                        resp.output.get("fund_name"),
-                    )
+                    logger.debug("[enrich_fund_ranks] %s  → rank=%s", fund_name, winrich_rank)
                 else:
                     outcome["error"] = resp.error
-                    logger.debug("[enrich_fund_ranks]   → NO MATCH: %s", resp.error)
+                    logger.debug("[enrich_fund_ranks] %s  → NO MATCH: %s", fund_name, resp.error)
 
             enriched_row = row  # already a dict
             # Only write winrich_rank when a real rank was resolved.
@@ -1470,27 +1456,13 @@ class MFPortfolioAgent(Agent):
         resolved_path     = r1.output.get("resolved_path", "")
 
         # ── Step 2: benchmark enrichment ──────────────────────────────────────
-        _bm_col = "benchmark_index"
-        _already_enriched = (
-            _bm_col in customer_df.columns
-            and customer_df[_bm_col].notna().any()
-            and customer_df[_bm_col].astype(str).str.strip().ne("").any()
-        )
-        logger.debug(
-            "[generate_quarterly_report] Step 2 — _already_enriched=%s | sample: %s",
-            _already_enriched,
-            customer_df[_bm_col].dropna().unique().tolist()[:5] if _bm_col in customer_df.columns else "N/A",
-        )
-        if _already_enriched:
-            enrichment_meta = {"source": "SchemeLookup (WinrichMFDataAgent)"}
+        r2 = self.run("enrich_benchmarks", {**base, "customer_df": customer_df})
+        if r2.status == AgentStatus.SUCCESS:
+            customer_df     = r2.output["customer_df"]
+            enrichment_meta = r2.metadata
         else:
-            r2 = self.run("enrich_benchmarks", {**base, "customer_df": customer_df})
-            if r2.status == AgentStatus.SUCCESS:
-                customer_df     = r2.output["customer_df"]
-                enrichment_meta = r2.metadata
-            else:
-                enrichment_meta = {"warning": f"enrich_benchmarks failed: {r2.error}"}
-            logger.debug("[generate_quarterly_report] Step 2 — result: %s", enrichment_meta)
+            enrichment_meta = {"warning": f"enrich_benchmarks failed: {r2.error}"}
+        logger.debug("[generate_quarterly_report] Step 2 — result: %s", enrichment_meta)
 
         # ── Step 3: fund rank enrichment ──────────────────────────────────────
         ranking_meta: Dict[str, Any] = {}

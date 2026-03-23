@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 
-
+  
 class StorageAdapter(ABC):
     """Abstract interface for cloud/local storage backends."""
 

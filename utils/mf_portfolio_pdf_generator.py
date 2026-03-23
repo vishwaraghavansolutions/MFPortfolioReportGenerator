@@ -3,7 +3,7 @@ mf_portfolio_pdf_generator.py
 ------------------------------   
 WinRich Professional Services — Portfolio Performance Report Generator
 
-CHANGES (this version)
+CHANGES (this version)  
 -----------------------
 Fix 1  Section 2  — Added Bench 3Y column (between Bench 1Y and Bench 5Y).
 Fix 2  Section 2a — Total Portfolio row now shows value-weighted XIRR instead of "—".

@@ -1,5 +1,5 @@
 """
-utils/auth.py
+utils/auth.py  
 -------------
 Shared authentication guard for all Streamlit pages.
 

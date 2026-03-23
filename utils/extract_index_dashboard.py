@@ -1,5 +1,5 @@
 """
-NSE Index Dashboard PDF Extractor
+NSE Index Dashboard PDF Extractor 
 ----------------------------------
 Reads all PDF files from data/pdfs/ folder, extracts index data tables
 (Broad Market, Sectoral, Strategy, and Thematic indices), and saves

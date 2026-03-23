@@ -1,5 +1,5 @@
 """
-agents/_store.py
+agents/_store.py  
 
 Shared IndexStore — in-process registry of NSE Index Dashboard data.
 

@@ -2,7 +2,7 @@
 agents/fund_ranking_agent.py
 
 FundRankingAgent
-----------------
+----------------  
 Reads fund ranking data from:
   1. GCP bucket  : gs://winrich_shared/ranking/fund_ranking.csv
   2. Local file  : fund_ranking.csv  (fallback if GCP is unavailable)
@@ -224,8 +224,6 @@ def _normalise_category(value) -> str:
     ('Large Cap') while mfapi / SEBI returns the long form ('Large Cap Fund').
     Safely handles NaN / None / non-string values.
     """
-    if not isinstance(value, str):
-        return ""
     n = value.strip().lower()
     if n.endswith(" fund"):
         n = n[:-5].strip()
