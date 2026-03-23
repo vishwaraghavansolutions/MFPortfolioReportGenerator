@@ -1,9 +1,9 @@
 """
 mf_portfolio_pdf_generator.py
-------------------------------   
+------------------------------
 WinRich Professional Services — Portfolio Performance Report Generator
 
-CHANGES (this version)  
+CHANGES (this version)
 -----------------------
 Fix 1  Section 2  — Added Bench 3Y column (between Bench 1Y and Bench 5Y).
 Fix 2  Section 2a — Total Portfolio row now shows value-weighted XIRR instead of "—".
@@ -334,14 +334,12 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         f"Funds: {d.get('n_funds', '?')} across {d.get('n_amcs', '?')} AMCs"
     )
 
-    # ── Build funds_source ────────────────────────────────────────────────────
     funds_source = list(d.get("all_funds") or [])
 
     if not funds_source:
         for f in (d.get("equity_funds") or []) + (d.get("hybrid_funds") or []):
             funds_source.append({
                 "name":                 f.get("name", "—"),
-                "nature":               f.get("nature", ""),
                 "xirr":                 _safe_float(f.get("xirr")),
                 "benchmark_index":      f.get("benchmark_index") or "",
                 "benchmark_xirr":       _safe_float(f.get("benchmark_xirr") or f.get("benchmark")),
@@ -355,67 +353,14 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         for fg in (d.get("fund_gains") or []):
             funds_source.append({
                 "name":  fg.get("name", "—"),
-                "nature": fg.get("nature", ""),
                 "xirr":  _safe_float(fg.get("xirr")),
                 "benchmark_index": "", "benchmark_xirr": None,
                 "benchmark_return_1yr": None, "benchmark_return_3yr": None,
                 "benchmark_return_5yr": None, "winrich_rank": "N/A",
             })
 
-    # ── Build reliable equity / hybrid name sets from the passed lists ───────
-    # These are already correctly classified by the metrics pipeline and power
-    # the portfolio snapshot table — use them as the primary classifier rather
-    # than relying on the 'nature' field which may be absent on all_funds rows.
-    _equity_names = {f["name"] for f in (d.get("equity_funds") or [])}
-    _hybrid_names = {f["name"] for f in (d.get("hybrid_funds") or [])}
-
-    def _fund_heading(fund: dict) -> str:
-        name = fund.get("name", "")
-        if name in _equity_names:
-            return "Your Equity Funds"
-        if name in _hybrid_names:
-            return "Your Hybrid Funds"
-        # Remaining funds: classify by nature then by benchmark index name then by fund name
-        nature = str(fund.get("nature", "")).strip().lower()
-        if "debt" in nature:
-            return "Your Debt Funds"
-        bench = str(fund.get("benchmark_index", "")).lower()
-        if "gold" in bench or "silver" in bench:
-            return "Your Gold & Silver Funds"
-        if "debt" in bench or "bond" in bench or "gilt" in bench or "liquid" in bench:
-            return "Your Debt Funds"
-        # Last resort: infer from fund name keywords (handles stale/missing benchmark_index)
-        name_lower = name.lower()
-        if "gold" in name_lower or "silver" in name_lower:
-            return "Your Gold & Silver Funds"
-        if ("debt" in name_lower or "bond" in name_lower or "gilt" in name_lower
-                or "liquid" in name_lower or "overnight" in name_lower
-                or "money market" in name_lower or "ultra short" in name_lower
-                or "low duration" in name_lower or "short duration" in name_lower
-                or "medium duration" in name_lower or "long duration" in name_lower
-                or "credit risk" in name_lower or "banking and psu" in name_lower
-                or "corporate bond" in name_lower or "floater" in name_lower):
-            return "Your Debt Funds"
-        return "Your Other Funds"
-
-    # ── Group funds by section heading ────────────────────────────────────────
-    from collections import defaultdict
-    grouped: dict[str, list] = defaultdict(list)
+    fund_lines = []
     for f in funds_source:
-        grouped[_fund_heading(f)].append(f)
-
-    # Canonical section order
-    _SECTION_ORDER = [
-        "Your Equity Funds",
-        "Your Hybrid Funds",
-        "Your Debt Funds",
-        "Your Gold & Silver Funds",
-        "Your Other Funds",
-    ]
-    present_sections = [s for s in _SECTION_ORDER if s in grouped]
-
-    # ── Build per-fund lines ──────────────────────────────────────────────────
-    def _fund_line(f: dict) -> str:
         fx     = _safe_float(f.get("xirr"))
         fx_str = f"{fx:.2f}%" if fx is not None else "N/A"
         b1yr   = _safe_float(f.get("benchmark_return_1yr") or f.get("benchmark_xirr"))
@@ -428,26 +373,21 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         ])) or "N/A"
         bench_idx = f.get("benchmark_index") or "N/A"
         rank      = f.get("winrich_rank")    or "N/A"
+
+        # Pre-compute verdict so Claude never has to infer it from the numbers
         bench_ref = b1yr if b1yr is not None else (b3yr if b3yr is not None else b5yr)
         if fx is not None and bench_ref is not None:
             verdict = "OUTPERFORMS benchmark" if fx > bench_ref else "UNDERPERFORMS benchmark"
         else:
             verdict = "benchmark comparison not available"
-        return (
+
+        fund_lines.append(
             f"  {f.get('name', '—')}: "
             f"Your XIRR={fx_str} | "
             f"Benchmark ({bench_idx}) Trailing Returns: {bench_details} | "
             f"Verdict: {verdict} | "
             f"WinRich Rank={rank}"
         )
-
-    # ── Build section-grouped fund block ─────────────────────────────────────
-    fund_block_lines: list[str] = []
-    for section in present_sections:
-        fund_block_lines.append(f"{section}:")
-        for f in grouped[section]:
-            fund_block_lines.append(_fund_line(f))
-        fund_block_lines.append("")
 
     alloc_lines = []
     for r in (d.get("allocation_rows") or []):
@@ -471,17 +411,16 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         else:
             amc_lines.append(f"  {amc}")
 
-    # ── Build section heading instructions ────────────────────────────────────
-    section_list = "\n".join(f"  {s}" for s in ["How Your Portfolio Has Done Overall"]
-                             + present_sections + ["Key Observations"])
-
     lines = [
         "You are a professional mutual fund portfolio analyst at WinRich Professional Services.",
         "Write a concise, warm portfolio performance commentary addressed directly to the client.",
         "Use plain text only — no markdown formatting, no bullet points, no asterisks.",
         "",
-        "Use EXACTLY these section headings, each on its own line:",
-        section_list,
+        "Use EXACTLY these four section headings, each on its own line:",
+        "  How Your Portfolio Has Done Overall",
+        "  Your Equity Funds",
+        "  Your Hybrid Fund",
+        "  Key Observations",
         "",
         "Write 3-5 sentences per section.",
         "Reference actual fund names, XIRR values, benchmark index names,",
@@ -498,8 +437,9 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         "--- Portfolio Data ---",
         header,
         "",
-        "Funds (grouped by category):",
-        *fund_block_lines,
+        "Funds:",
+        *fund_lines,
+        "",
         "Asset Allocation:",
         *(alloc_lines or ["  N/A"]),
         "",
@@ -513,45 +453,23 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
 def _parse_commentary(raw):
     headings = [
-        # Fixed headings
-        "How Your Portfolio Has Done Overall",
-        "Key Observations",
-        "Portfolio Overview",
-        "Quarter in Review",
-        # Fund-category headings (dynamic — must list all possible variants)
-        "Your Equity Funds",
-        "Your Hybrid Funds",
-        "Your Hybrid Fund",
-        "Your Debt Funds",
-        "Your Debt Fund",
-        "Your Gold & Silver Funds",
-        "Your Gold & Silver Fund",
-        "Your Gold and Silver Funds",
-        "Your Other Funds",
-        "Your Other Fund",
-        # Legacy / fallback
-        "Equity Portfolio",
-        "Hybrid Portfolio",
-        "Debt Portfolio",
+        "How Your Portfolio Has Done Overall","Your Equity Funds",
+        "Your Hybrid Fund","Your Hybrid Funds","Key Observations",
+        "Portfolio Overview","Equity Portfolio","Hybrid Portfolio","Quarter in Review",
     ]
     blocks, cur_h, cur_b = [], None, []
     for line in raw.splitlines():
         line = line.strip()
-        if not line:
-            continue
+        if not line: continue
         matched = next((h for h in headings if line.lower().startswith(h.lower())), None)
         if matched:
-            if cur_h and cur_b:
-                blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
-            cur_h = matched
-            cur_b = []
+            if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
+            cur_h=matched; cur_b=[]
             rest = line[len(matched):].strip().lstrip(':').strip()
-            if rest:
-                cur_b.append(rest)
+            if rest: cur_b.append(rest)
         elif cur_h:
             cur_b.append(line)
-    if cur_h and cur_b:
-        blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
+    if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
     return blocks
 
 

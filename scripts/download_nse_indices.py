@@ -19,10 +19,10 @@ agent = NSEBenchmarkAgent()
 
 # ── Option B: Download a specific subset ─────────────────────────────────────
 resp = agent.run("download_index_data", {
-     "year":    2011,
-     "indices": ["NIFTY 50", "NIFTY 200","NIFTY 100", "NIFTY 500", 
-                 "NIFTY MIDCAP 150", "NIFTY MIDCAP 50", "NIFTY MIDCAP 100",
-                 "NIFTY SMALLCAP 250",  "NIFTY SMALLCAP 50", "NIFTY SMALLCAP 100", "NIFTY SMALLCAP 250",
+     "year":    2010,
+     "indices": ["NIFTY 50", "NIFTY 100","NIFTY 200", "NIFTY 500", 
+                 "NIFTY MIDCAP 150", "NIFTY MIDCAP 50", "NIFTY MIDCAP 100", "NIFTY MIDCAP 250", "NIFTY MIDCAP SELECT",
+                 "NIFTY SMALLCAP 250",  "NIFTY SMALLCAP 50", "NIFTY SMALLCAP 100", "NIFTY SMALLCAP 500",
                   "NIFTY LARGEMIDCAP 250"],
     })
 

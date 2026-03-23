@@ -210,10 +210,10 @@ _STRIP_PATTERNS: List[_re.Pattern] = [
 
 
 def _normalise(value) -> str:
-    """Basic lowercase + strip (used for scheme_type)."""
-    if value is None or value != value:  # None or NaN
+    """Basic lowercase + strip. Safely handles NaN / None / non-string values."""
+    if not isinstance(value, str):
         return ""
-    return str(value).strip().lower()
+    return value.strip().lower()
 
 
 def _normalise_category(value) -> str:
@@ -222,30 +222,34 @@ def _normalise_category(value) -> str:
     Strips a trailing ' fund' so that 'Large Cap' == 'Large Cap Fund',
     'Mid Cap' == 'Mid Cap Fund', etc.  The ranking CSV uses the short form
     ('Large Cap') while mfapi / SEBI returns the long form ('Large Cap Fund').
+    Safely handles NaN / None / non-string values.
     """
-    if value is None or value != value:  # None or NaN
-        return ""
-    n = str(value).strip().lower()
+    n = value.strip().lower()
     if n.endswith(" fund"):
         n = n[:-5].strip()
     return n
 
 
-def _clean_name(name: str) -> str:
+def _clean_name(name) -> str:
     """Strip plan/option/erstwhile suffixes from a portfolio fund name."""
+    if not isinstance(name, str):
+        return ""
     for pat in _STRIP_PATTERNS:
         name = pat.sub("", name)
     return name.strip()
 
 
-def _deep_normalise(name: str) -> str:
+def _deep_normalise(name) -> str:
     """
     Full normalisation pipeline for fund name matching:
       1. Strip plan/option/erstwhile suffixes
       2. Lowercase + strip
       3. Apply word normalisations  (e.g. "Largecap" → "large cap")
       4. Apply AMC abbreviations    (e.g. "canara robeco" → "canara rob")
+    Safely handles NaN / None / non-string values.
     """
+    if not isinstance(name, str):
+        return ""
     name = _clean_name(name)
     n = name.strip().lower()
     for pat, rep in _WORD_NORMS:
@@ -290,24 +294,27 @@ def _filter_rows(
         scheme_type, st, scheme_category, sc,
     )
 
+    _plan_filter_norm = _normalise(_PLAN_FILTER)
     category_rows = [
         r for r in rows
         if _normalise_category(r.get("Scheme Category", "")) == sc
         and (
             not _PLAN_FILTER
-            or _normalise(r.get("Plan", "")) == _normalise(_PLAN_FILTER)
+            or _plan_filter_norm in _normalise(r.get("Plan", ""))
         )
     ]
     logger.debug(
-        "[_filter_rows] %d / %d CSV rows pass category+plan filter (plan_filter=%r)",
+        "[_filter_rows] %d / %d CSV rows pass category+plan filter (plan_filter=%r, mode=contains)",
         len(category_rows), len(rows), _PLAN_FILTER or "disabled",
     )
     if not category_rows:
-        # Show what scheme_type / scheme_category values actually exist in the CSV
+        # Show what scheme_type / scheme_category / plan values exist in the CSV
         csv_types = sorted({_normalise(r.get("Scheme Type", "")) for r in rows})
         csv_cats  = sorted({_normalise(r.get("Scheme Category", "")) for r in rows})
-        logger.debug("[_filter_rows] CSV scheme_types  available: %s", csv_types)
-        logger.debug("[_filter_rows] CSV scheme_categories available: %s", csv_cats)
+        csv_plans = sorted({_normalise(r.get("Plan", "")) for r in rows})
+        logger.debug("[_filter_rows] CSV scheme_types       available: %s", csv_types)
+        logger.debug("[_filter_rows] CSV scheme_categories  available: %s", csv_cats)
+        logger.debug("[_filter_rows] CSV plan values        available: %s", csv_plans)
 
     matched = []
     for row in category_rows:
@@ -337,12 +344,13 @@ def _max_rank_in_category(
     """Highest rank value within the given scheme type + category."""
     st = _normalise(scheme_type)
     sc = _normalise_category(scheme_category)
+    _plan_filter_norm = _normalise(_PLAN_FILTER)
     category_rows = [
         r for r in rows
         if _normalise_category(r.get("Scheme Category", "")) == sc
         and (
             not _PLAN_FILTER
-            or _normalise(r.get("Plan", "")) == _normalise(_PLAN_FILTER)
+            or _plan_filter_norm in _normalise(r.get("Plan", ""))
         )
     ]
     if not category_rows:
