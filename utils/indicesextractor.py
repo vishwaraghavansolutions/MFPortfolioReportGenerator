@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 # -----------------------------
-# Utility: Ensure unique columns
+# Utility: Ensure unique columns   
 # -----------------------------
 def make_unique(columns):
     seen = {}

@@ -3,7 +3,7 @@ import pandas as pd
 from io import StringIO
 from typing import List, Optional
 import streamlit as st
-
+ 
 class GCPCSVReader:
 
     def __init__(self, credentials_key: str = "gcp", bucket_name: str = "winrich"):

@@ -7,7 +7,7 @@ import io
 
 PARQUET_PATH = "data/indices.parquet"
 PDF_FOLDER = "data/pdfs"
-
+  
 
 def extract_all_tables(pdf_bytes: bytes) -> pd.DataFrame:
     """

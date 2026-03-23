@@ -1,7 +1,7 @@
 """
 agents/nse_benchmark_agent.py   
 
-NSE Benchmark Agent  (NSEBenchmarkAgent)
+NSE Benchmark Agent  (NSEBenchmarkAgent)  
 ─────────────────────────────────────────
 Downloads historical index data from niftyindices.com for a list of NSE
 Broad Market Indices over a full calendar year, then uploads the combined

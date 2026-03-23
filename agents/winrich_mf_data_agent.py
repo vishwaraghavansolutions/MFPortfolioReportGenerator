@@ -1,6 +1,6 @@
 """
 agents/winrich_mf_data_agent.py
-================================
+================================  
 WinrichMFDataAgent — sole owner of the MutualFunds datawarehouse CSV on GCS.
 
 All other agents call this agent to get customer data; they never touch

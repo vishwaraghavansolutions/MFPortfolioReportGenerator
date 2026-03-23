@@ -2,7 +2,7 @@
 agents/fund_ranking_agent.py
 
 FundRankingAgent
-----------------
+----------------  
 Reads fund ranking data from:
   1. GCP bucket  : gs://winrich_shared/ranking/fund_ranking.csv
   2. Local file  : fund_ranking.csv  (fallback if GCP is unavailable)

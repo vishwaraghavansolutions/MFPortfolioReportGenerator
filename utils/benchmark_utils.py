@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-
+  
 # ── Quarter → (year, month) mapping ──────────────────────────────────────────
 _QUARTER_MONTH_MAP = {
     'Q3_2025':  (2025, 3),    # Q4 FY25 → March 2025

@@ -1,7 +1,7 @@
 """
 agents/index_agent.py
 
-NSE Index Agent
+NSE Index Agent  
 ───────────────
 Responsible for loading NSE Index Dashboard parquet files and answering
 benchmark-value lookups against them.

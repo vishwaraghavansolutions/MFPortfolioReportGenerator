@@ -4,7 +4,7 @@ agents/mf_benchmark_agent.py
 Mutual Fund Benchmark Agent  (MutualFundBenchmarkAgent)
 ────────────────────────────────────────────────────────
 All skills are registered directly in the class body.
-
+  
 CSV skills (load from GCS winrich_shared/master/mf_benchmark_map.csv; FAIL if absent):
   1  get_amc_list
   2  get_funds_by_amc

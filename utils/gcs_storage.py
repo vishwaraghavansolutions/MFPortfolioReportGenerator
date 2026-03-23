@@ -6,7 +6,7 @@ from google.cloud import storage
 import streamlit as st
 from datetime import datetime
 from .storage_adapter import StorageAdapter
-
+ 
 
 class GCSStorage(StorageAdapter):
     """Google Cloud Storage implementation of StorageAdapter."""
