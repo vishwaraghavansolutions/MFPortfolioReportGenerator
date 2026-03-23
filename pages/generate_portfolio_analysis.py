@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+import pandas as pd
 import streamlit as st
 
 from agents.base import AgentStatus
@@ -222,14 +223,85 @@ if generate_clicked and selected_customer:
     # ── Step 5: AI commentary ─────────────────────────────────────────────────
     commentary = []
     if not skip_commentary:
+        import math as _math
+
+        def _cf(v):
+            if v is None:
+                return None
+            try:
+                f = float(v)
+                return None if (_math.isnan(f) or _math.isinf(f)) else f
+            except (TypeError, ValueError):
+                return None
+
+        _cur_vals   = customer_df["CurValue"].fillna(0)
+        _inv_vals   = customer_df["TotalInvAmt"].fillna(0) if "TotalInvAmt" in customer_df.columns else _cur_vals * 0
+        _total_cur  = float(_cur_vals.sum())
+        _total_inv  = float(_inv_vals.sum())
+        try:
+            _port_xirr = float(
+                (customer_df["FolioXIRR"].fillna(0) * _cur_vals).sum() / _cur_vals.sum()
+            ) if _cur_vals.sum() > 0 else None
+        except Exception:
+            _port_xirr = None
+        try:
+            _start_dates      = pd.to_datetime(customer_df["FolioStartDate"], errors="coerce").dropna()
+            _investment_start = _start_dates.min().strftime("%B %d, %Y") if not _start_dates.empty else ""
+        except Exception:
+            _investment_start = ""
+
+        _equity_names = {f["name"] for f in metrics["equity_funds"]}
+        _hybrid_names = {f["name"] for f in metrics["hybrid_funds"]}
+
+        _all_funds = []
+        for _, _row in customer_df.iterrows():
+            fsd = _row.get("FolioStartDate", "")
+            if hasattr(fsd, "strftime"):
+                fsd = fsd.strftime("%d-%b-%Y")
+            _all_funds.append({
+                "name":                 str(_row.get("s_name", "")),
+                "nature":               str(_row.get("Nature", "")),
+                "xirr":                 _cf(_row.get("FolioXIRR")),
+                "winrich_rank":         str(_row.get("winrich_rank", "N/A") or "N/A"),
+                "benchmark_index":      str(_row.get("benchmark_index") or ""),
+                "benchmark_xirr":       _cf(_row.get("benchmark_return_1yr")) or _cf(_row.get("benchmark_return_3yr")) or _cf(_row.get("benchmark_return_5yr")),
+                "benchmark_return_1yr": _cf(_row.get("benchmark_return_1yr")),
+                "benchmark_return_3yr": _cf(_row.get("benchmark_return_3yr")),
+                "benchmark_return_5yr": _cf(_row.get("benchmark_return_5yr")),
+                "folio_start_date":     str(fsd).strip(),
+            })
+
         progress.progress(70, text="🤖 Generating AI commentary…")
         r5_com = agent.run("generate_ai_commentary", {
             "portfolio_data": {
-                "client_name":       selected_customer,
-                "equity_funds":      metrics["equity_funds"],
-                "hybrid_funds":      metrics["hybrid_funds"],
-                "amc_concentration": metrics["amc_concentration"],
-                "client_allocation": metrics["allocation"],
+                "client_name":         selected_customer,
+                "report_date":         as_of_date.strftime("%B %d, %Y"),
+                "investment_start":    _investment_start,
+                "total_invested":      _cf(_total_inv),
+                "total_current_value": _cf(_total_cur),
+                "total_gain":          round(_total_cur - _total_inv, 2),
+                "portfolio_xirr":      _cf(_port_xirr),
+                "n_funds":             int(metrics["num_funds"]),
+                "n_amcs":              len(metrics["amc_concentration"]),
+                "equity_funds":        metrics["equity_funds"],
+                "hybrid_funds":        metrics["hybrid_funds"],
+                "amc_concentration":   metrics["amc_concentration"],
+                "client_allocation":   metrics["allocation"],
+                "allocation_rows": [
+                    {
+                        "asset_class":        ac,
+                        "your_allocation":    f"{pct:.2f}%",
+                        "funds_in_portfolio": " | ".join(
+                            str(row["s_name"])
+                            for _, row in customer_df[
+                                customer_df["Nature"] == ("Balance" if ac == "Hybrid" else ac)
+                            ].iterrows()
+                        ) or "—",
+                    }
+                    for ac, pct in metrics["allocation"].items()
+                    if (pct or 0) > 0
+                ],
+                "all_funds": _all_funds,
             }
         })
         if r5_com.status == AgentStatus.SUCCESS:

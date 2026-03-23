@@ -1,9 +1,9 @@
 """
 mf_portfolio_pdf_generator.py
-------------------------------
+------------------------------   
 WinRich Professional Services — Portfolio Performance Report Generator
 
-CHANGES (this version)
+CHANGES (this version)  
 -----------------------
 Fix 1  Section 2  — Added Bench 3Y column (between Bench 1Y and Bench 5Y).
 Fix 2  Section 2a — Total Portfolio row now shows value-weighted XIRR instead of "—".
@@ -124,7 +124,18 @@ def _fmt_inr(val):
         v = float(val)
     except (TypeError, ValueError):
         return '—'
-    return f"{RS}{v:,.0f}"
+    # Indian numbering: last 3 digits, then groups of 2
+    n = int(abs(v))
+    s = str(n)
+    if len(s) > 3:
+        s = s[:-3][-1::-1]  # digits before last 3, reversed
+        s = ','.join(s[i:i+2] for i in range(0, len(s), 2))
+        s = s[::-1] + ',' + str(n)[-3:]
+    else:
+        s = str(n)
+    if v < 0:
+        s = '-' + s
+    return f"{RS}{s}"
 
 def _ret(val, bold=False, color_it=True, style='cell_c'):
     if val is None or (isinstance(val, float) and math.isnan(val)):
@@ -323,13 +334,23 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
     total_gain = total_gain if total_gain is not None else (total_cur - total_inv)
     xirr_str   = f"{port_xirr:.2f}%" if port_xirr is not None else "N/A"
 
+    def _crore(v):
+        """Express a rupee value as a crore string, e.g. 10037302 → 'Rs.1.00 crore'."""
+        if not v:
+            return "N/A"
+        c = v / 1_00_00_000
+        if c >= 1:
+            return f"Rs.{c:.2f} crore"
+        l = v / 1_00_000
+        return f"Rs.{l:.2f} lakh"
+
     header = (
         f"Client: {d.get('client_name', 'N/A')} | "
         f"Report Date: {d.get('report_date', 'N/A')}\n"
         f"Investment Start: {d.get('investment_start', 'N/A')} | "
-        f"Invested: Rs.{total_inv:,.0f} | "
-        f"Current Value: Rs.{total_cur:,.0f} | "
-        f"Gain: Rs.{total_gain:,.0f} | "
+        f"Invested: {_crore(total_inv)} | "
+        f"Current Value: {_crore(total_cur)} | "
+        f"Gain: {_crore(total_gain)} | "
         f"Portfolio XIRR: {xirr_str} | "
         f"Funds: {d.get('n_funds', '?')} across {d.get('n_amcs', '?')} AMCs"
     )
@@ -362,25 +383,36 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
                 "benchmark_return_5yr": None, "winrich_rank": "N/A",
             })
 
-    # ── Map nature values → display section headings ──────────────────────────
-    # "Balance" is the raw Nature value for hybrid funds in the data warehouse
-    _NATURE_TO_HEADING = {
-        "equity":  "Your Equity Funds",
-        "balance": "Your Hybrid Funds",
-        "hybrid":  "Your Hybrid Funds",
-        "debt":    "Your Debt Funds",
-    }
+    # ── Build reliable equity / hybrid name sets from the passed lists ───────
+    # These are already correctly classified by the metrics pipeline and power
+    # the portfolio snapshot table — use them as the primary classifier rather
+    # than relying on the 'nature' field which may be absent on all_funds rows.
+    _equity_names = {f["name"] for f in (d.get("equity_funds") or [])}
+    _hybrid_names = {f["name"] for f in (d.get("hybrid_funds") or [])}
 
     def _fund_heading(fund: dict) -> str:
+        name = fund.get("name", "")
+        if name in _equity_names:
+            return "Your Equity Funds"
+        if name in _hybrid_names:
+            return "Your Hybrid Funds"
+        # Remaining funds: classify by nature then by benchmark index name then by fund name
         nature = str(fund.get("nature", "")).strip().lower()
-        if nature in _NATURE_TO_HEADING:
-            return _NATURE_TO_HEADING[nature]
-        # FoF / Gold / Silver / Other — classify by benchmark name
+        if "debt" in nature:
+            return "Your Debt Funds"
         bench = str(fund.get("benchmark_index", "")).lower()
-        if "gold" in bench or "silver" in bench:
-            return "Your Gold & Silver Funds"
-        if "fof" in nature or "fund of fund" in nature or "overseas" in bench:
-            return "Your Other Funds"
+        if "debt" in bench or "bond" in bench or "gilt" in bench or "liquid" in bench:
+            return "Your Debt Funds"
+        # Last resort: infer from fund name keywords (handles stale/missing benchmark_index)
+        name_lower = name.lower()
+        if ("debt" in name_lower or "bond" in name_lower or "gilt" in name_lower
+                or "liquid" in name_lower or "overnight" in name_lower
+                or "money market" in name_lower or "ultra short" in name_lower
+                or "low duration" in name_lower or "short duration" in name_lower
+                or "medium duration" in name_lower or "long duration" in name_lower
+                or "credit risk" in name_lower or "banking and psu" in name_lower
+                or "corporate bond" in name_lower or "floater" in name_lower):
+            return "Your Debt Funds"
         return "Your Other Funds"
 
     # ── Group funds by section heading ────────────────────────────────────────
@@ -389,12 +421,11 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
     for f in funds_source:
         grouped[_fund_heading(f)].append(f)
 
-    # Canonical section order
+    # Canonical section order — exactly 4 fund-type sections
     _SECTION_ORDER = [
         "Your Equity Funds",
         "Your Hybrid Funds",
         "Your Debt Funds",
-        "Your Gold & Silver Funds",
         "Your Other Funds",
     ]
     present_sections = [s for s in _SECTION_ORDER if s in grouped]
@@ -406,25 +437,31 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         b1yr   = _safe_float(f.get("benchmark_return_1yr") or f.get("benchmark_xirr"))
         b3yr   = _safe_float(f.get("benchmark_return_3yr"))
         b5yr   = _safe_float(f.get("benchmark_return_5yr"))
-        bench_details = ", ".join(filter(None, [
-            f"1Y={b1yr:.2f}%" if b1yr is not None else None,
-            f"3Y={b3yr:.2f}%" if b3yr is not None else None,
-            f"5Y={b5yr:.2f}%" if b5yr is not None else None,
-        ])) or "N/A"
-        bench_idx = f.get("benchmark_index") or "N/A"
+        bench_idx = f.get("benchmark_index") or ""
         rank      = f.get("winrich_rank")    or "N/A"
         bench_ref = b1yr if b1yr is not None else (b3yr if b3yr is not None else b5yr)
-        if fx is not None and bench_ref is not None:
-            verdict = "OUTPERFORMS benchmark" if fx > bench_ref else "UNDERPERFORMS benchmark"
-        else:
-            verdict = "benchmark comparison not available"
-        return (
-            f"  {f.get('name', '—')}: "
-            f"Your XIRR={fx_str} | "
-            f"Benchmark ({bench_idx}) Trailing Returns: {bench_details} | "
-            f"Verdict: {verdict} | "
-            f"WinRich Rank={rank}"
-        )
+        has_benchmark = bench_idx and bench_ref is not None
+
+        # Folio start date — normalise to string
+        fsd = f.get("folio_start_date") or f.get("FolioStartDate") or ""
+        if hasattr(fsd, "strftime"):
+            fsd = fsd.strftime("%d-%b-%Y")
+        fsd = str(fsd).strip()
+
+        parts = [f"  {f.get('name', '—')}: Your XIRR={fx_str}"]
+        if fsd:
+            parts[0] += f" (Invested since: {fsd})"
+        if has_benchmark:
+            bench_details = ", ".join(filter(None, [
+                f"1Y={b1yr:.2f}%" if b1yr is not None else None,
+                f"3Y={b3yr:.2f}%" if b3yr is not None else None,
+                f"5Y={b5yr:.2f}%" if b5yr is not None else None,
+            ]))
+            verdict = "OUTPERFORMS benchmark" if fx is not None and fx > bench_ref else "UNDERPERFORMS benchmark"
+            parts.append(f"Benchmark ({bench_idx}) Trailing Returns: {bench_details}")
+            parts.append(f"Verdict: {verdict}")
+        parts.append(f"WinRich Rank={rank}")
+        return " | ".join(parts)
 
     # ── Build section-grouped fund block ─────────────────────────────────────
     fund_block_lines: list[str] = []
@@ -457,6 +494,7 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
             amc_lines.append(f"  {amc}")
 
     # ── Build section heading instructions ────────────────────────────────────
+    # Always include all 4 fund-type sections + the fixed headings; skip if no funds in that section
     section_list = "\n".join(f"  {s}" for s in ["How Your Portfolio Has Done Overall"]
                              + present_sections + ["Key Observations"])
 
@@ -469,16 +507,26 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         section_list,
         "",
         "Write 3-5 sentences per section.",
-        "Reference actual fund names, XIRR values, benchmark index names,",
-        "and trailing benchmark returns (1Y/3Y/5Y where available).",
+        "Reference actual fund names and XIRR values.",
         "Note: Your XIRR is the annualised return from the client's investment date.",
         "Trailing benchmark returns (1Y/3Y/5Y) are market index returns over those calendar periods.",
+        "When mentioning monetary amounts, always express them in crores or lakhs",
+        "(e.g. 'Rs.1.00 crore', 'Rs.45.50 lakh'). Never write raw numbers or use comma-separated digits.",
         "",
-        "CRITICAL RULE — performance verdict:",
-        "Each fund already has a pre-computed Verdict field (OUTPERFORMS / UNDERPERFORMS benchmark).",
-        "You MUST use that verdict exactly as given. Never override it by re-comparing the numbers yourself.",
-        "A fund OUTPERFORMS only when its XIRR is strictly greater than the benchmark return.",
-        "A fund UNDERPERFORMS when its XIRR is strictly less than the benchmark return.",
+        "CRITICAL RULE — new funds (invested < 12 months ago):",
+        f"Today's report date is {d.get('report_date', 'N/A')}.",
+        "Each fund line shows 'Invested since: <date>'. If a fund was invested less than 12 months",
+        "before the report date, do NOT analyse or comment on its performance — simply acknowledge",
+        "it as a recent addition and note that meaningful performance assessment requires at least",
+        "12 months of investment history.",
+        "",
+        "CRITICAL RULE — benchmark handling:",
+        "When a fund has benchmark data (Benchmark index and Trailing Returns are provided),",
+        "reference the benchmark index name and trailing returns, and use the pre-computed Verdict",
+        "(OUTPERFORMS / UNDERPERFORMS benchmark) exactly as given — never override it.",
+        "When a fund has NO benchmark data (no Benchmark line in the data), do NOT mention the",
+        "benchmark at all. Do NOT say 'benchmark not found' or 'benchmark not available'.",
+        "Simply discuss the fund's XIRR and what it means for the client.",
         "",
         "--- Portfolio Data ---",
         header,
@@ -498,23 +546,42 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
 def _parse_commentary(raw):
     headings = [
-        "How Your Portfolio Has Done Overall","Your Equity Funds",
-        "Your Hybrid Fund","Your Hybrid Funds","Key Observations",
-        "Portfolio Overview","Equity Portfolio","Hybrid Portfolio","Quarter in Review",
+        # Fixed headings
+        "How Your Portfolio Has Done Overall",
+        "Key Observations",
+        "Portfolio Overview",
+        "Quarter in Review",
+        # Fund-category headings — 4 canonical sections
+        "Your Equity Funds",
+        "Your Hybrid Funds",
+        "Your Hybrid Fund",
+        "Your Debt Funds",
+        "Your Debt Fund",
+        "Your Other Funds",
+        "Your Other Fund",
+        # Legacy / fallback
+        "Equity Portfolio",
+        "Hybrid Portfolio",
+        "Debt Portfolio",
     ]
     blocks, cur_h, cur_b = [], None, []
     for line in raw.splitlines():
         line = line.strip()
-        if not line: continue
+        if not line:
+            continue
         matched = next((h for h in headings if line.lower().startswith(h.lower())), None)
         if matched:
-            if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
-            cur_h=matched; cur_b=[]
+            if cur_h and cur_b:
+                blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
+            cur_h = matched
+            cur_b = []
             rest = line[len(matched):].strip().lstrip(':').strip()
-            if rest: cur_b.append(rest)
+            if rest:
+                cur_b.append(rest)
         elif cur_h:
             cur_b.append(line)
-    if cur_h and cur_b: blocks.append({'heading':cur_h,'body':' '.join(cur_b).strip()})
+    if cur_h and cur_b:
+        blocks.append({'heading': cur_h, 'body': ' '.join(cur_b).strip()})
     return blocks
 
 
@@ -624,7 +691,7 @@ class MFPortfolioPDFGenerator:
         val_row = [_p(v,'kpi_val') for v,_ in kpis]
         lbl_row = [_p(l,'kpi_lbl') for _,l in kpis]
 
-        kpi_t = Table([val_row, lbl_row], colWidths=[1.4*inch]*len(kpis))
+        kpi_t = Table([val_row, lbl_row], colWidths=[1.55*inch, 1.55*inch, 1.55*inch, 1.2*inch, 1.15*inch])
         kpi_ts = TableStyle([
             ('ALIGN',         (0,0),(-1,-1),'CENTER'),
             ('VALIGN',        (0,0),(-1,-1),'MIDDLE'),

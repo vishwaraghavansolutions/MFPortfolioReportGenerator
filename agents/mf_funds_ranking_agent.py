@@ -198,6 +198,7 @@ _WORD_NORMS: List[tuple] = [
 # but are never present in ranking CSV fund names.
 _STRIP_PATTERNS: List[_re.Pattern] = [
     _re.compile(r'\s*\(erstwhile[^)]*\)',            _re.IGNORECASE),
+    _re.compile(r'\s*\(formerly[^)]*\)',             _re.IGNORECASE),
     _re.compile(r'\s*-\s*regular.*$',                _re.IGNORECASE),
     _re.compile(r'\s*-\s*direct.*$',                 _re.IGNORECASE),
     _re.compile(r'\s*-\s*growth.*$',                 _re.IGNORECASE),
@@ -224,6 +225,8 @@ def _normalise_category(value) -> str:
     ('Large Cap') while mfapi / SEBI returns the long form ('Large Cap Fund').
     Safely handles NaN / None / non-string values.
     """
+    if not isinstance(value, str):
+        return ""
     n = value.strip().lower()
     if n.endswith(" fund"):
         n = n[:-5].strip()
@@ -384,9 +387,9 @@ class FundRankingAgent(Agent):
             ranking_prefix   : str   – e.g. "ranking"
         """
         # ── validate inputs ───────────────────────────────────────────────────
-        fund_name       = params.get("fund_name", "").strip()
-        scheme_type     = params.get("scheme_type", "").strip()
-        scheme_category = params.get("scheme_category", "").strip()
+        fund_name       = str(params.get("fund_name",       "") or "").strip()
+        scheme_type     = str(params.get("scheme_type",     "") or "").strip()
+        scheme_category = str(params.get("scheme_category", "") or "").strip()
 
         logger.info(
             "FundRankingAgent.get_fund_rank called with fund_name='%s', scheme_type='%s', scheme_category='%s'",

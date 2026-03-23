@@ -525,8 +525,10 @@ class MFPortfolioAgent(Agent):
             [str(r.get("s_name", "")) for _, r in customer_df.iterrows()],
         )
 
+        _FORMERLY_RE = re.compile(r"\s*\(formerly[^)]*\)", re.IGNORECASE)
+
         for _, row in customer_df.iterrows():
-            fund_name = str(row.get("s_name", "")).strip()
+            fund_name = _FORMERLY_RE.sub("", str(row.get("s_name", ""))).strip()
 
             logger.debug("[enrich_benchmarks] ── fund: %r", fund_name)
 
@@ -1316,7 +1318,8 @@ class MFPortfolioAgent(Agent):
             inv  = float(row.get("TotalInvAmt") or 0)
             cur  = float(row.get("CurValue")    or 0)
             gain = cur - inv
-            abs_return = (gain / inv * 100) if inv > 0 else 0
+            _abs = row.get("absReturn")
+            abs_return = float(_abs) if pd.notna(_abs) and _abs is not None else ((gain / inv * 100) if inv > 0 else 0)
             raw_date = row.get("FolioStartDate") or row.get("folio_start_date") or ""
             try:
                 parsed_date     = pd.to_datetime(str(raw_date), errors="coerce")
