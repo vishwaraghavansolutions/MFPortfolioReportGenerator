@@ -71,12 +71,10 @@ class WinrichMFDataAgent(Agent):
         self,
         scheme_csv:   Optional[Path] = None,
         mapping_json: Optional[Path] = None,
-        parquet_dir:  Optional[Path] = None,
     ):
         self._lookup_kwargs: Dict[str, Any] = {}
         if scheme_csv:   self._lookup_kwargs["scheme_csv"]   = scheme_csv
         if mapping_json: self._lookup_kwargs["mapping_json"] = mapping_json
-        if parquet_dir:  self._lookup_kwargs["parquet_dir"]  = parquet_dir
         self._lookup: Optional[SchemeLookup] = None  # lazy init
 
     # ── Skill map ──────────────────────────────────────────────────────────────

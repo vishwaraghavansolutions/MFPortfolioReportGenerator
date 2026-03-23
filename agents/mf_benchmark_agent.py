@@ -34,6 +34,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import re
 import requests
 
 from .base import Agent, AgentResponse, AgentStatus
@@ -403,8 +404,10 @@ def skill_lookup_benchmark_by_name(params: Dict[str, Any]) -> AgentResponse:
 
     # Compare only the portion before " - " in both the query and the scheme_name.
     # e.g. "Canara Robeco Large Cap Fund - Regular Growth" → "canara robeco large cap fund"
+    _CAP_RE = re.compile(r"\b(mid|large|small|multi|flexi)\s+(cap)\b", re.IGNORECASE)
     def _base(s: str) -> str:
-        return s.split(" - ")[0].strip().lower()
+        b = s.split(" - ")[0].strip().lower()
+        return _CAP_RE.sub(r"\1\2", b)  # "mid cap" → "midcap", "large cap" → "largecap"
 
     query_base   = _base(fund_name)
     scheme_bases = df["scheme_name"].fillna("").apply(_base)

@@ -102,7 +102,7 @@ def get_customer_portfolio(
     lookup : SchemeLookup, optional
         Pre-initialised SchemeLookup instance. Reuse across multiple
         calls to avoid reloading files on every invocation.
-    scheme_csv, mapping_json : Path, optional
+    scheme_csv, mapping_json, parquet_dir : Path, optional
         Override default file paths forwarded to SchemeLookup.
 
     Returns

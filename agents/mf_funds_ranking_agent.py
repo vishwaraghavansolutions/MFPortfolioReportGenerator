@@ -209,19 +209,23 @@ _STRIP_PATTERNS: List[_re.Pattern] = [
 ]
 
 
-def _normalise(value: str) -> str:
+def _normalise(value) -> str:
     """Basic lowercase + strip (used for scheme_type)."""
-    return value.strip().lower()
+    if value is None or value != value:  # None or NaN
+        return ""
+    return str(value).strip().lower()
 
 
-def _normalise_category(value: str) -> str:
+def _normalise_category(value) -> str:
     """
     Normalise scheme_category for matching.
     Strips a trailing ' fund' so that 'Large Cap' == 'Large Cap Fund',
     'Mid Cap' == 'Mid Cap Fund', etc.  The ranking CSV uses the short form
     ('Large Cap') while mfapi / SEBI returns the long form ('Large Cap Fund').
     """
-    n = value.strip().lower()
+    if value is None or value != value:  # None or NaN
+        return ""
+    n = str(value).strip().lower()
     if n.endswith(" fund"):
         n = n[:-5].strip()
     return n
