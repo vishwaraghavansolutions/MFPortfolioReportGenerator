@@ -253,22 +253,39 @@ if generate_clicked and selected_customer:
         _equity_names = {f["name"] for f in metrics["equity_funds"]}
         _hybrid_names = {f["name"] for f in metrics["hybrid_funds"]}
 
+        # ── DEBUG: log all fund rows to diagnose XIRR/date discrepancies ────────
+        import logging as _logging
+        _pg_logger = _logging.getLogger(__name__)
+        for _, _dr in customer_df.iterrows():
+            _pg_logger.info(
+                "[all_funds debug] %-60s  FolioStartDate=%-25s  FolioXIRR=%s  benchmark_folio_xirr=%s",
+                str(_dr.get("s_name", ""))[:60],
+                str(_dr.get("FolioStartDate", "")),
+                _dr.get("FolioXIRR"),
+                _dr.get("benchmark_folio_xirr"),
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         _all_funds = []
         for _, _row in customer_df.iterrows():
-            fsd = _row.get("FolioStartDate", "")
-            if hasattr(fsd, "strftime"):
-                fsd = fsd.strftime("%d-%b-%Y")
+            _fsd_raw = _row.get("FolioStartDate", "")
+            try:
+                _fsd_parsed = pd.to_datetime(_fsd_raw, errors="coerce")
+                _fsd_str = _fsd_parsed.strftime("%d-%b-%Y") if not pd.isnull(_fsd_parsed) else ""
+            except Exception:
+                _fsd_str = str(_fsd_raw).strip() if _fsd_raw else ""
             _all_funds.append({
-                "name":                 str(_row.get("s_name", "")),
-                "nature":               str(_row.get("Nature", "")),
-                "xirr":                 _cf(_row.get("FolioXIRR")),
-                "winrich_rank":         str(_row.get("winrich_rank", "N/A") or "N/A"),
-                "benchmark_index":      str(_row.get("benchmark_index") or ""),
-                "benchmark_xirr":       _cf(_row.get("benchmark_return_1yr")) or _cf(_row.get("benchmark_return_3yr")) or _cf(_row.get("benchmark_return_5yr")),
-                "benchmark_return_1yr": _cf(_row.get("benchmark_return_1yr")),
-                "benchmark_return_3yr": _cf(_row.get("benchmark_return_3yr")),
-                "benchmark_return_5yr": _cf(_row.get("benchmark_return_5yr")),
-                "folio_start_date":     str(fsd).strip(),
+                "name":                  str(_row.get("s_name", "")),
+                "nature":                str(_row.get("Nature", "")),
+                "xirr":                  _cf(_row.get("FolioXIRR")),
+                "folio_start_date":      _fsd_str,
+                "winrich_rank":          str(_row.get("winrich_rank", "N/A") or "N/A"),
+                "benchmark_index":       str(_row.get("benchmark_index") or ""),
+                "benchmark_folio_xirr":  _cf(_row.get("benchmark_folio_xirr")),
+                "benchmark_xirr":        _cf(_row.get("benchmark_return_1yr")) or _cf(_row.get("benchmark_return_3yr")) or _cf(_row.get("benchmark_return_5yr")),
+                "benchmark_return_1yr":  _cf(_row.get("benchmark_return_1yr")),
+                "benchmark_return_3yr":  _cf(_row.get("benchmark_return_3yr")),
+                "benchmark_return_5yr":  _cf(_row.get("benchmark_return_5yr")),
             })
 
         progress.progress(70, text="🤖 Generating AI commentary…")

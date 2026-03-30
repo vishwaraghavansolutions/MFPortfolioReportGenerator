@@ -8,6 +8,9 @@
       "Bash(python -c \"import py_compile; py_compile.compile\\(''c:/MyWorkSpace/Ourlife/Apps/Python/MFPortfolioReportGenerator/scripts/ao_fetch.py''\\)\")",
       "Bash(python -c \"import json; data=json.load\\(open\\(''c:/MyWorkSpace/Ourlife/Apps/Python/MFPortfolioReportGenerator/data/ao_api_sniff.json''\\)\\); apis=[d for d in data if ''json'' in d.get\\(''headers'',{}\\).get\\(''content-type'',''''\\) or d[''json'']]; print\\(f''Total: {len\\(data\\)}, API calls: {len\\(apis\\)}''\\); [print\\(d[''url'']\\) for d in apis]\")",
       "Bash(python -c \":*)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\venka\\Desktop\\AngelOneRunner\\scripts"
     ]
   }
 }

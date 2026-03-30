@@ -63,7 +63,7 @@ import pandas as pd
 
 from agents.base import Agent, AgentResponse, AgentStatus
 from agents.winrich_mf_data_agent import WinrichMFDataAgent
-from agents.mf_benchmark_agent import MutualFundBenchmarkAgent
+from agents.mf_benchmark_agent import MutualFundBenchmarkAgent, _infer_asset_class as _bm_infer_asset_class
 from agents.index_agent import IndexAgent
 from agents.mf_funds_ranking_agent import FundRankingAgent
 from agents.gcs_storage_agent import GCSStorageAgent
@@ -149,10 +149,19 @@ def _normalize_to_nse_index(benchmark: str) -> Optional[str]:
     # 1. Exact match
     if name in BROAD_MARKET_INDICES:
         return name
-    # 2. One contains the other (handles minor spacing/wording differences)
-    for idx in BROAD_MARKET_INDICES:
-        if idx in name or name in idx:
+    # 2. name is fully contained within an index name (e.g. minor wording difference)
+    for idx in sorted(BROAD_MARKET_INDICES, key=len, reverse=True):
+        if name in idx:
             return idx
+    # 3. Index name is a prefix of name BUT only if the next character is non-alphabetic
+    #    (prevents "NIFTY 50" matching "NIFTY 50 HYBRID COMPOSITE DEBT 50:50")
+    #    Sort longest-first so more specific indices (NIFTY MIDCAP 150) win over shorter ones (NIFTY 50).
+    for idx in sorted(BROAD_MARKET_INDICES, key=len, reverse=True):
+        if name.startswith(idx):
+            remainder = name[len(idx):]
+            # Remainder must be empty or start with a non-alphabetic character
+            if not remainder or not remainder.lstrip()[0].isalpha():
+                return idx
     return None
 
 
@@ -282,6 +291,74 @@ def _calc_return(
         result,
     )
     return round(result, 2)
+
+
+def _calc_benchmark_xirr(
+    nse_df: "pd.DataFrame",
+    index_name: str,
+    folio_date: "date_type",
+    as_of_date: "date_type",
+) -> "Optional[float]":
+    """
+    Return the annualised % return for *index_name* from *folio_date* to *as_of_date*,
+    using the nearest prior trading day for each endpoint.
+
+    This gives a true apples-to-apples comparison against the fund's XIRR,
+    since both cover exactly the same investment period.
+
+    xirr = ((close_as_of / close_folio_start) ^ (365.25 / days) − 1) × 100
+    """
+    import pandas as pd
+
+    sub = nse_df[nse_df["index_name"] == index_name].copy()
+    if sub.empty:
+        return None
+
+    date_col  = _find_col(sub, _NSE_DATE_COLS)
+    close_col = _find_col(sub, _NSE_CLOSE_COLS)
+    if date_col is None or close_col is None:
+        return None
+
+    sub[date_col]  = pd.to_datetime(sub[date_col], dayfirst=True, errors="coerce")
+    sub[close_col] = pd.to_numeric(sub[close_col].astype(str).str.replace(",", ""), errors="coerce")
+    sub = sub.dropna(subset=[date_col, close_col]).sort_values(date_col)
+
+    as_of_ts = pd.Timestamp(as_of_date)
+    folio_ts = pd.Timestamp(folio_date)
+
+    recent = sub[sub[date_col] <= as_of_ts]
+    start  = sub[sub[date_col] <= folio_ts]
+
+    if recent.empty:
+        logger.debug(
+            "_calc_benchmark_xirr(%r): no data on/before as_of=%s", index_name, as_of_date
+        )
+        return None
+    if start.empty:
+        # Folio predates loaded index data — use earliest available row as best approximation
+        start = sub.head(1)
+        logger.debug(
+            "_calc_benchmark_xirr(%r): no data on/before folio=%s, using earliest available: %s",
+            index_name, folio_date, start.iloc[0][date_col].date(),
+        )
+
+    close_now   = recent.iloc[-1][close_col]
+    close_start = start.iloc[-1][close_col]
+
+    if pd.isna(close_now) or pd.isna(close_start) or close_start <= 0:
+        return None
+
+    days = (recent.iloc[-1][date_col] - start.iloc[-1][date_col]).days
+    if days <= 0:
+        return None
+
+    xirr = ((close_now / close_start) ** (365.25 / days) - 1) * 100
+    logger.debug(
+        "_calc_benchmark_xirr(%r): folio=%s  as_of=%s  days=%d  "
+        "%.2f → %.2f  XIRR=%.2f%%",
+        index_name, folio_date, as_of_date, days, close_start, close_now, xirr,
+    )
+    return round(xirr, 2)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -481,8 +558,17 @@ class MFPortfolioAgent(Agent):
             else:
                 as_of_date = date_type.today()
 
-        # ── Load NSE index data from GCS (all years needed for 5yr lookback) ──
-        years_needed = list(range(as_of_date.year - 5, as_of_date.year + 1))
+        # ── Load NSE index data from GCS ─────────────────────────────────────
+        # Go back to the earliest folio start date so benchmark_folio_xirr
+        # can be computed for long-held funds (older than 5 years).
+        try:
+            _earliest = pd.to_datetime(
+                customer_df["FolioStartDate"], errors="coerce"
+            ).dropna().min()
+            _earliest_year = int(_earliest.year) if not pd.isna(_earliest) else as_of_date.year - 5
+        except Exception:
+            _earliest_year = as_of_date.year - 5
+        years_needed = list(range(min(_earliest_year, as_of_date.year - 5), as_of_date.year + 1))
         gcs_agent    = self._get_gcs_agent()
         nse_dfs: List[pd.DataFrame] = []
         nse_load_errors: List[str]  = []
@@ -545,6 +631,7 @@ class MFPortfolioAgent(Agent):
             nse_index_name:  Optional[str]   = None
             found_in_map:    bool            = False
             return_values: Dict[str, Optional[float]] = {c: None for c in _BENCHMARK_RETURN_COLS}
+            return_values["benchmark_folio_xirr"] = None
 
             # Step 1 – look up SEBI benchmark by fund name via mf_benchmark_agent
             if fund_name:
@@ -642,6 +729,15 @@ class MFPortfolioAgent(Agent):
                             "[enrich_benchmarks]   step3 %s = %s  (lookback=%dd)",
                             col, val, lookback,
                         )
+                    # Benchmark XIRR over the exact same period as the client's investment
+                    if folio_date is not None:
+                        return_values["benchmark_folio_xirr"] = _calc_benchmark_xirr(
+                            nse_df, nse_index_name, folio_date, as_of_date
+                        )
+                        logger.debug(
+                            "[enrich_benchmarks]   step3 benchmark_folio_xirr=%s  (folio=%s → as_of=%s)",
+                            return_values["benchmark_folio_xirr"], folio_date, as_of_date,
+                        )
                     outcome["source"] = "MFBenchmarkAgent+NSEBenchmarkAgent"
                 except Exception as exc:
                     outcome["error"] = (
@@ -669,12 +765,17 @@ class MFPortfolioAgent(Agent):
                 enriched_row["scheme_category"] = scheme_category
             elif "scheme_category" not in enriched_row:
                 enriched_row["scheme_category"] = None
+            # Derive authoritative fund_type from scheme_category
+            _cat_for_type = enriched_row.get("scheme_category") or ""
+            _ac = _bm_infer_asset_class(_cat_for_type) if _cat_for_type else None
+            enriched_row["fund_type"] = _ac if _ac in ("Equity", "Debt", "Hybrid") else ("Other" if _ac else None)
             enriched_row["benchmark_source"]  = outcome["source"]
             enriched_row["nse_index_name"]    = nse_index_name
             # Always overwrite with NSE-computed values (or None → '-' in PDF).
             # Never fall back to pre-populated WinrichMFDataAgent values.
             for col in _BENCHMARK_RETURN_COLS:
                 enriched_row[col] = return_values[col]
+            enriched_row["benchmark_folio_xirr"] = return_values["benchmark_folio_xirr"]
 
             logger.debug(
                 "[enrich_benchmarks]   result  source=%r  returns=%s",
@@ -1302,15 +1403,24 @@ class MFPortfolioAgent(Agent):
             if rank_val is not None and str(rank_val).strip() not in ("", "nan", "None", "N/A"):
                 winrich_rank = str(rank_val).strip()
 
+            _fsd_raw = row.get("FolioStartDate") or row.get("folio_start_date") or ""
+            try:
+                _fsd_parsed = pd.to_datetime(str(_fsd_raw), errors="coerce")
+                _fsd_str = _fsd_parsed.strftime("%d-%b-%Y") if not pd.isnull(_fsd_parsed) else ""
+            except Exception:
+                _fsd_str = str(_fsd_raw).strip() if _fsd_raw else ""
             all_funds.append({
-                "name":                 row["s_name"],
-                "benchmark_index":      bench_idx,
-                "winrich_rank":         winrich_rank,
-                "xirr":                 folio_xirr,
-                "benchmark_return_3m":  b3m,
-                "benchmark_return_1yr": b1yr,
-                "benchmark_return_3yr": b3yr,
-                "benchmark_return_5yr": b5yr,
+                "name":                  row["s_name"],
+                "folio_start_date":      _fsd_str,
+                "benchmark_index":       bench_idx,
+                "winrich_rank":          winrich_rank,
+                "xirr":                  folio_xirr,
+                "benchmark_folio_xirr":  _safe_float("benchmark_folio_xirr"),
+                "benchmark_return_3m":   b3m,
+                "benchmark_return_1yr":  b1yr,
+                "benchmark_return_3yr":  b3yr,
+                "benchmark_return_5yr":  b5yr,
+                "fund_type":             str(row.get("fund_type") or "").strip() or None,
             })
 
         fund_gains = []
@@ -1537,21 +1647,28 @@ class MFPortfolioAgent(Agent):
 
         _all_funds_for_commentary = []
         for _, _row in customer_df.iterrows():
+            _fsd_raw = _row.get("FolioStartDate")
+            try:
+                _fsd_str = pd.to_datetime(_fsd_raw).strftime("%d-%b-%Y") if pd.notna(_fsd_raw) else ""
+            except Exception:
+                _fsd_str = str(_fsd_raw).strip() if _fsd_raw else ""
             _all_funds_for_commentary.append({
-                "name":                 str(_row.get("s_name", "")),
-                "nature":               str(_row.get("Nature", "")),
-                "xirr":                 _clean_float(_row.get("FolioXIRR")),
-                "winrich_rank":         str(_row.get("winrich_rank", "N/A") or "N/A"),
-                "benchmark_index":      str(_row.get("benchmark_index") or ""),
-                "benchmark_xirr":       (
+                "name":                  str(_row.get("s_name", "")),
+                "nature":                str(_row.get("Nature", "")),
+                "xirr":                  _clean_float(_row.get("FolioXIRR")),
+                "folio_start_date":      _fsd_str,
+                "winrich_rank":          str(_row.get("winrich_rank", "N/A") or "N/A"),
+                "benchmark_index":       str(_row.get("benchmark_index") or ""),
+                "benchmark_folio_xirr":  _clean_float(_row.get("benchmark_folio_xirr")),
+                "benchmark_xirr":        (
                     _clean_float(_row.get("benchmark_return_1yr"))
                     or _clean_float(_row.get("benchmark_return_3yr"))
                     or _clean_float(_row.get("benchmark_return_5yr"))
                 ),
-                "benchmark_return_3m":  _clean_float(_row.get("benchmark_return_3m")),
-                "benchmark_return_1yr": _clean_float(_row.get("benchmark_return_1yr")),
-                "benchmark_return_3yr": _clean_float(_row.get("benchmark_return_3yr")),
-                "benchmark_return_5yr": _clean_float(_row.get("benchmark_return_5yr")),
+                "benchmark_return_3m":   _clean_float(_row.get("benchmark_return_3m")),
+                "benchmark_return_1yr":  _clean_float(_row.get("benchmark_return_1yr")),
+                "benchmark_return_3yr":  _clean_float(_row.get("benchmark_return_3yr")),
+                "benchmark_return_5yr":  _clean_float(_row.get("benchmark_return_5yr")),
             })
 
         _fund_gains_for_commentary = []
