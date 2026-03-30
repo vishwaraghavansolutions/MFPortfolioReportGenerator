@@ -432,6 +432,7 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
 
     # ── Build per-fund lines ──────────────────────────────────────────────────
     def _fund_line(f: dict) -> str:
+        from datetime import datetime as _dt
         fx     = _safe_float(f.get("xirr"))
         fx_str = f"{fx:.2f}%" if fx is not None else "N/A"
         b1yr   = _safe_float(f.get("benchmark_return_1yr") or f.get("benchmark_xirr"))
@@ -439,8 +440,6 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
         b5yr   = _safe_float(f.get("benchmark_return_5yr"))
         bench_idx = f.get("benchmark_index") or ""
         rank      = f.get("winrich_rank")    or "N/A"
-        bench_ref = b1yr if b1yr is not None else (b3yr if b3yr is not None else b5yr)
-        has_benchmark = bench_idx and bench_ref is not None
 
         # Folio start date — normalise to string
         fsd = f.get("folio_start_date") or f.get("FolioStartDate") or ""
@@ -448,17 +447,22 @@ def _build_commentary_prompt(portfolio_data: dict) -> str:
             fsd = fsd.strftime("%d-%b-%Y")
         fsd = str(fsd).strip()
 
+        # Pick benchmark period closest to client's investment tenure
+        # Use benchmark XIRR over the same period as the fund (folio start → today)
+        bench_ref = _safe_float(f.get("benchmark_folio_xirr"))
+        # Fallback to tenure-matched trailing return if folio XIRR is unavailable
+        if bench_ref is None:
+            bench_ref = b1yr if b1yr is not None else (b3yr if b3yr is not None else b5yr)
+
+        has_benchmark = bench_idx and bench_ref is not None
+
         parts = [f"  {f.get('name', '—')}: Your XIRR={fx_str}"]
         if fsd:
             parts[0] += f" (Invested since: {fsd})"
         if has_benchmark:
-            bench_details = ", ".join(filter(None, [
-                f"1Y={b1yr:.2f}%" if b1yr is not None else None,
-                f"3Y={b3yr:.2f}%" if b3yr is not None else None,
-                f"5Y={b5yr:.2f}%" if b5yr is not None else None,
-            ]))
+            bench_xirr_str = f"{bench_ref:.2f}%" if bench_ref is not None else "N/A"
             verdict = "OUTPERFORMS benchmark" if fx is not None and fx > bench_ref else "UNDERPERFORMS benchmark"
-            parts.append(f"Benchmark ({bench_idx}) Trailing Returns: {bench_details}")
+            parts.append(f"Benchmark ({bench_idx}) XIRR (same period)={bench_xirr_str}")
             parts.append(f"Verdict: {verdict}")
         parts.append(f"WinRich Rank={rank}")
         return " | ".join(parts)
@@ -730,69 +734,158 @@ class MFPortfolioPDFGenerator:
             t.setStyle(ts); story.append(t)
         return story
 
-    # ── FIX 1: Section 2 — added Bench 3Y column ─────────────────────────────
-    def _section_fund_performance(self, all_funds):
+    # ── Section 2 — Benchmark XIRR over same period as client's investment ────
+    def _section_fund_performance(self, all_funds, d=None):
+        from datetime import datetime
+        from collections import defaultdict
+
         story = [_p("2  Fund Performance vs Benchmark", 'section')]
+        story.append(_p("How to read this table", 'sub_hdr'))
         story.append(_p(
-            "XIRR (Since Investment) is the annualised return your money has earned from your investment "
-            "date in each fund. Benchmark returns are the relevant market index returns over trailing periods.",
-            'footnote'))
-
-        # 8 columns: Fund Name | Benchmark Index | WinRich Rank | Your XIRR | 3M | 1Y | 3Y | 5Y
-        # Total must fit within 7.0 in (letter – 2×0.75 in margins)
-        col_w = [1.9*inch, 1.3*inch, 0.7*inch, 0.7*inch, 0.6*inch, 0.6*inch, 0.6*inch, 0.6*inch]
-        hdr   = [
-            _p("Fund Name",        'th_left'),
-            _p("Benchmark Index",  'th_left'),
-            _p("WinRich\nRank",    'th_sm'),
-            _p("Your\nXIRR",       'th_sm'),
-            _p("Bench\n3M",        'th_sm'),
-            _p("Bench\n1Y",        'th_sm'),
-            _p("Bench\n3Y",        'th_sm'),
-            _p("Bench\n5Y",        'th_sm'),
-        ]
-        rows = [hdr]
-        for f in all_funds:
-            name = f.get('name', '—')
-            for sfx in [' (Erstwhile Kotak Standard Multicap Fund - Gr)',
-                        ' (Erstwhile Kotak Emerging Equity Scheme)',
-                        ' - Regular Plan - Growth', ' - Regular Growth',
-                        ' - Regular Plan', ' Regular Growth',
-                        ' - Growth', ' - Regular', ' Regular']:
-                name = name.replace(sfx, '')
-            rows.append([
-                _p(name.strip(), 'cell_b'),
-                _p(f.get('benchmark_index') or '—', 'cell_sm'),
-                _p(str(f.get('winrich_rank') or 'N/A'), 'cell_bc'),
-                _xirr_cell(f.get('xirr')),
-                _ret(f.get('benchmark_return_3m'),  color_it=False),
-                _ret(f.get('benchmark_return_1yr'), color_it=False),
-                _ret(f.get('benchmark_return_3yr'), color_it=False),
-                _ret(f.get('benchmark_return_5yr'), color_it=False),
-            ])
-
-        t  = Table(rows, colWidths=col_w, repeatRows=1)
-        ts = _base_ts()
-        ts.add('ALIGN', (0,0), (1,-1), 'LEFT')
-        # Shade the four benchmark return columns (cols 4-7)
-        ts.add('BACKGROUND', (4,1), (7,-1), BENCH_BG)
-        for cmd in _alt_rows(len(rows)): ts.add(*cmd)
-        t.setStyle(ts)
-        story.append(t)
-        story.append(_p(
-            "<b>Your XIRR</b> = annualised return from your investment date. "
-            "<b>Bench 3M / 1Y / 3Y / 5Y</b> = benchmark index return over trailing 3-month, 1-year, 3-year, and 5-year periods. "
             "<b>WinRich Rank</b> = fund's rank among category peers based on risk-adjusted performance. "
-            "<b>Note on trailing-period XIRR:</b> The 3M / 1Y / 3Y / 5Y XIRR figures treat your total ongoing SIP amount as a "
-            "single lump-sum investment made at the start of each period. This is a simplification — individual monthly SIP "
-            "instalments are not modelled separately, so actual SIP returns may vary. "
+            "<b>Your XIRR</b> = annualised return from your folio start date to today. "
+            "<b>Tenure</b> = how long you have been invested in that fund. "
+            "<b>Bench XIRR</b> = annualised return of the benchmark index over the exact same period as your investment — "
+            "calculated using your current fund value if invested lumpsum on your actual start date on the benchmark. "
+            "It uses the actual index closing value on your folio start date and the as-of date's closing value. "
+            "We have benchmark values for Nifty Sectoral indices only. "
             "<b>Past performance is not indicative of future returns.</b>",
             'footnote'))
+
+        # ── Classify each fund into Equity / Debt / Hybrid / Other ───────────
+        equity_names = {f["name"] for f in ((d or {}).get("equity_funds") or [])}
+        hybrid_names = {f["name"] for f in ((d or {}).get("hybrid_funds") or [])}
+
+        def _classify(f):
+            # Primary: fund_type set by _enrich_benchmarks via _infer_asset_class(scheme_category)
+            ft = str(f.get("fund_type") or "").strip()
+            if ft in ("Equity", "Debt", "Hybrid", "Other"):
+                return ft
+
+            # Fallback 1: equity_funds / hybrid_funds name sets passed in d
+            name = f.get("name", "")
+            if name in equity_names:
+                return "Equity"
+            if name in hybrid_names:
+                return "Hybrid"
+
+            # Fallback 2: nature field
+            nature = str(f.get("nature", "")).strip().lower()
+            if "equity" in nature:
+                return "Equity"
+            if "hybrid" in nature or "balanced" in nature:
+                return "Hybrid"
+            if "debt" in nature:
+                return "Debt"
+
+            # Fallback 3: benchmark index name and fund name keywords
+            bench = str(f.get("benchmark_index", "")).lower()
+            name_lower = name.lower()
+            if "hybrid" in bench or "balanced" in bench:
+                return "Hybrid"
+            if "debt" in bench or "bond" in bench or "gilt" in bench or "liquid" in bench:
+                return "Debt"
+            if ("hybrid" in name_lower or "balanced" in name_lower or " baf" in name_lower
+                    or "dynamic asset" in name_lower or "multi asset" in name_lower):
+                return "Hybrid"
+            if ("debt" in name_lower or "bond" in name_lower or "gilt" in name_lower
+                    or "liquid" in name_lower or "overnight" in name_lower
+                    or "money market" in name_lower or "ultra short" in name_lower
+                    or "low duration" in name_lower or "short duration" in name_lower
+                    or "medium duration" in name_lower or "long duration" in name_lower
+                    or "credit risk" in name_lower or "banking and psu" in name_lower
+                    or "corporate bond" in name_lower or "floater" in name_lower):
+                return "Debt"
+            if any(kw in bench for kw in [
+                    "nifty", "sensex", "bse", "nse", "midcap", "smallcap", "largecap",
+                    "msci", "nasdaq", "s&p", "russell", "ftse"]):
+                return "Equity"
+            if any(kw in name_lower for kw in [
+                    "mid cap", "midcap", "small cap", "smallcap", "large cap", "largecap",
+                    "flexi cap", "multi cap", "multicap", "elss", "tax saver",
+                    "bluechip", "blue chip", "equity", "focused fund",
+                    "value fund", "sectoral", "thematic", "pharma", "banking",
+                    "infrastructure", "technology", "fmcg", "consumption",
+                    "opportunities", "contra"]):
+                return "Equity"
+            return "Other"
+
+        groups: dict = defaultdict(list)
+        for f in all_funds:
+            groups[_classify(f)].append(f)
+
+        SECTION_ORDER = [
+            ("Equity", "2.1", "Equity Funds"),
+            ("Debt",   "2.2", "Debt Funds"),
+            ("Hybrid", "2.3", "Hybrid Funds"),
+            ("Other",  "2.4", "Other Funds"),
+        ]
+
+        # 6 columns: Fund Name | Benchmark Index | WinRich Rank | Your XIRR | Tenure | Bench XIRR
+        col_w = [2.1*inch, 1.5*inch, 0.7*inch, 0.7*inch, 0.7*inch, 0.8*inch]
+
+        def _tenure_str(f):
+            fsd = f.get('folio_start_date') or f.get('FolioStartDate') or ''
+            if hasattr(fsd, 'strftime'):
+                fsd = fsd.strftime('%d-%b-%Y')
+            fsd = str(fsd).strip()
+            report_dt = getattr(self, 'report_date', '') or ''
+            try:
+                rd = datetime.strptime(report_dt, '%B %d, %Y') if report_dt else datetime.now()
+                fd = datetime.strptime(fsd, '%d-%b-%Y')
+                days = (rd - fd).days
+                years = days / 365.25
+                return f'{years:.1f} yrs' if years >= 1 else f'{int(days / 30.44)} mo'
+            except Exception:
+                return '—'
+
+        def _build_group_table(fund_list):
+            hdr = [
+                _p("Fund Name",        'th_left'),
+                _p("Benchmark Index",  'th_left'),
+                _p("WinRich\nRank",    'th_sm'),
+                _p("Your\nXIRR",       'th_sm'),
+                _p("Tenure",           'th_sm'),
+                _p("Bench\nXIRR",      'th_sm'),
+            ]
+            rows = [hdr]
+            for f in fund_list:
+                name = f.get('name', '—')
+                for sfx in [' (Erstwhile Kotak Standard Multicap Fund - Gr)',
+                            ' (Erstwhile Kotak Emerging Equity Scheme)',
+                            ' - Regular Plan - Growth', ' - Regular Growth',
+                            ' - Regular Plan', ' Regular Growth',
+                            ' - Growth', ' - Regular', ' Regular']:
+                    name = name.replace(sfx, '')
+                rows.append([
+                    _p(name.strip(), 'cell_b'),
+                    _p(f.get('benchmark_index') or '—', 'cell_sm'),
+                    _p(str(f.get('winrich_rank') or 'N/A'), 'cell_bc'),
+                    _xirr_cell(f.get('xirr')),
+                    _p(_tenure_str(f), 'cell_c'),
+                    _ret(f.get('benchmark_folio_xirr'), color_it=False),
+                ])
+            t  = Table(rows, colWidths=col_w, repeatRows=1)
+            ts = _base_ts()
+            ts.add('ALIGN', (0,0), (1,-1), 'LEFT')
+            ts.add('BACKGROUND', (4,1), (5,-1), BENCH_BG)
+            for cmd in _alt_rows(len(rows)): ts.add(*cmd)
+            t.setStyle(ts)
+            return t
+
+        for fund_type, num, label in SECTION_ORDER:
+            fund_list = groups.get(fund_type, [])
+            if not fund_list:
+                continue
+            story.append(_p(f"{num}  {label}", 'sub_hdr'))
+            story.append(_build_group_table(fund_list))
+            story.append(Spacer(1, 0.06*inch))
+
         return story
 
-    # ── FIX 2: Section 2a — value-weighted XIRR in total row ─────────────────
+    # ── FIX 2: Section 2.5 — value-weighted XIRR in total row ───────────────
     def _section_fund_gains(self, fund_gains):
-        story = [_p("2a  Fund-wise Gains — What Your Money Has Earned", 'sub_hdr')]
+        story = [_p("2.5  Fund-wise Gains — What Your Money Has Earned", 'sub_hdr')]
         story.append(_p(
             "This table shows the actual rupee gain in each fund along with the absolute return — "
             "total % earned from start to today, without adjusting for time. "
@@ -1031,7 +1124,7 @@ class MFPortfolioPDFGenerator:
         story.append(Spacer(1, 0.1*inch))
 
         if d.get('all_funds'):
-            story.extend(self._section_fund_performance(d['all_funds']))
+            story.extend(self._section_fund_performance(d['all_funds'], d))
             story.append(Spacer(1, 0.08*inch))
         if d.get('fund_gains'):
             story.extend(self._section_fund_gains(d['fund_gains']))

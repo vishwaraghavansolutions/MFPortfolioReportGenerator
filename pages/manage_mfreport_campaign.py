@@ -18,6 +18,15 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+# ── Load .env before any agent/config imports ─────────────────────────────────
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    if os.path.exists(_env_file):
+        _load_dotenv(_env_file, override=False)
+except ImportError:
+    pass
+
 import pandas as pd
 import streamlit as st
 
@@ -351,13 +360,13 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         from utils.campaign_utils import TokenBucketRateLimiter, with_retry, chunk_list
         from agents.mf_portfolio_agent import MFPortfolioAgent
         from agents.gcs_storage_agent import GCSStorageAgent
-        from agents.email_agent import EmailAgent
+        from agents.outlook_inbox_agent import OutlookInboxAgent
 
         # mf_agent is intentionally NOT created here — each _gen_pdf worker
         # creates its own MFPortfolioAgent() to avoid thread-safety issues
         # with the lazy-init sub-agents (WinrichMFDataAgent, IndexAgent, etc.)
-        gcs_agent   = GCSStorageAgent()
-        email_agent = EmailAgent()
+        gcs_agent     = GCSStorageAgent()
+        outlook_agent = OutlookInboxAgent()
 
         cfg = _build_rate_config(params)
 
@@ -384,8 +393,8 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         shared_pdf = {k: params[k] for k in (
             "csv_path", "company_name", "skip_commentary",
             "parquet_dir", "bucket_name", "max_lookback_days",
-            "logo_path", "risk_profile",
-        ) if k in params}
+            "logo_path", "risk_profile", "as_of_date",
+        ) if k in params and params[k]}
         shared_pdf["output_dir"] = norm_output_dir
 
         def _gen_pdf(name):
@@ -481,7 +490,7 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
                         break
                     name, gcs_uri, err = fut.result()
                     if gcs_uri:
-                        log(f"✓ GCS {name}", "ok")
+                        log(f"✓ GCS {name} → {gcs_uri}", "ok")
                         phase2_results[name] = gcs_uri
                         log_q.put({"type": "count", "key": "gcs_done", "delta": 1})
                         cp.mark_gcs_done(name, gcs_uri); cp.save()
@@ -531,14 +540,13 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
             email_limiter.acquire()
             try:
                 res = with_retry(
-                    lambda: email_agent.run("send_email", {
-                        "to_email": to_email,
-                        "client_name": name,
-                        "subject": f"Your {report_period} Portfolio Report — {company_name}",
-                        "pdf_path": phase1_results.get(name, cp.pdf_done.get(name, "")),
-                        "company_name": company_name,
+                    lambda: outlook_agent.run("send_email", {
+                        "to_email":      to_email,
+                        "client_name":   name,
+                        "subject":       f"Your {report_period} Portfolio Report — {company_name}",
+                        "pdf_path":      phase1_results.get(name, cp.pdf_done.get(name, "")),
+                        "company_name":  company_name,
                         "report_period": report_period,
-                        "transport": params.get("transport", ""),
                     }),
                     max_retries=cfg.max_retries,
                     backoff_s=cfg.retry_backoff_s,
@@ -671,17 +679,7 @@ with st.sidebar:
     company    = st.text_input("Company name", value="Winrich Professional Services")
 
     st.markdown('<div class="section-label" style="margin-top:18px">Email Transport</div>', unsafe_allow_html=True)
-    transport = st.selectbox("Transport", ["smtp", "sendgrid"])
-    rate_preset = st.selectbox(
-        "Rate preset",
-        ["default (Workspace SMTP)", "sendgrid", "smtp_free"],
-        help="sendgrid = high throughput | smtp_free = Gmail free tier",
-    )
-    preset_map = {
-        "default (Workspace SMTP)": "",
-        "sendgrid": "sendgrid",
-        "smtp_free": "smtp_free",
-    }
+    st.caption("📧 Sending via Microsoft Outlook (Graph API)")
 
     st.markdown('<div class="section-label" style="margin-top:18px">Throttle Overrides</div>', unsafe_allow_html=True)
     pdf_workers        = st.slider("PDF workers",         1, 12, 4)
@@ -701,8 +699,10 @@ with st.sidebar:
     parquet_dir       = st.text_input("Parquet data dir",   value="data",   help="Directory containing Index_Dashboard_*.parquet and SchemeData CSV files")
     bucket_name       = st.text_input("GCS bucket (data)",  value="winrich", help="GCS bucket for QoQ portfolio parquet files (WinrichMFDataAgent)")
     max_lookback_days = st.slider("Max lookback days", 1, 30, 10, help="How many days back to search for the latest portfolio data file")
-    logo_path         = st.text_input("Logo path",          value="",       help="Absolute path to company logo PNG/JPG for the PDF report")
+    logo_path         = st.text_input("Logo path",          value="assets/winrich-logo.png", help="Absolute path to company logo PNG/JPG for the PDF report")
     risk_profile      = st.text_input("Risk profile label", value="",       help="e.g. 'Moderate', 'Aggressive' — shown on the PDF")
+    as_of_date        = st.date_input("As of date", value=None,             help="Report as-of date. Leave blank to use today.")
+    as_of_date_str    = as_of_date.strftime("%Y-%m-%d") if as_of_date else ""
 
 
     # ── Customer Selection ────────────────────────────────────────────────────
@@ -865,8 +865,6 @@ campaign_params = {
     "csv_path":               csv_path,
     "output_dir":             _norm_output_dir,
     "company_name":           company,
-    "transport":              transport,
-    "rate_preset":            preset_map[rate_preset],
     "pdf_workers":            pdf_workers,
     "gcs_workers":            gcs_workers,
     "email_workers":          email_workers,
@@ -885,6 +883,7 @@ campaign_params = {
     "max_lookback_days":      max_lookback_days,
     "logo_path":              logo_path,
     "risk_profile":           risk_profile,
+    "as_of_date":             as_of_date_str,
     # Portfolio filter metadata (informational — filtering already applied via selected_customers)
     "portfolio_filter_min_cr": pf_min_cr if enable_portfolio_filter else None,
     "portfolio_filter_max_cr": pf_max_cr if enable_portfolio_filter else None,

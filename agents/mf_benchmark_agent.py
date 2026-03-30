@@ -621,9 +621,11 @@ def skill_lookup_benchmark_by_name(params: Dict[str, Any]) -> AgentResponse:
 
     # Compare only the portion before " - " in both the query and the scheme_name.
     # e.g. "Canara Robeco Large Cap Fund - Regular Growth" → "canara robeco large cap fund"
+    # Normalise " & " → " and " so "Large and Midcap" matches "Large & Midcap" in CSV
     _CAP_RE = re.compile(r"\b(mid|large|small|multi|flexi)\s+(cap)\b", re.IGNORECASE)
     def _base(s: str) -> str:
         b = s.split(" - ")[0].strip().lower()
+        b = b.replace(" & ", " and ")
         return _CAP_RE.sub(r"\1\2", b)  # "mid cap" → "midcap", "large cap" → "largecap"
 
     query_base   = _base(fund_name)
