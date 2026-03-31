@@ -340,8 +340,6 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         if pf_min is not None or pf_max is not None:
             log(f"Portfolio filter active: ≥ {pf_min} Cr — ≤ {pf_max} Cr", "info")
 
-        log_q.put({"type": "count", "key": "total", "delta": len(selected)})
-
         checkpoint_path = params.get("checkpoint_path", _default_checkpoint_path())
         cp = CampaignCheckpoint(checkpoint_path)
         if params.get("fresh_start", False):
@@ -395,11 +393,14 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
             "parquet_dir", "bucket_name", "max_lookback_days",
             "logo_path", "risk_profile", "as_of_date",
         ) if k in params and params[k]}
+        # Always pass filter values (0 = no bound, not None, so they always reach the agent)
+        shared_pdf["portfolio_min_value"] = float(params.get("portfolio_min_value") or 0)
+        shared_pdf["portfolio_max_value"] = float(params.get("portfolio_max_value") or 0)
         shared_pdf["output_dir"] = norm_output_dir
 
         def _gen_pdf(name):
             if stop_evt.is_set():
-                return name, None, "Stopped by user"
+                return name, None, "Stopped by user", None
             try:
                 # Each worker gets its own agent instance — the lazy-init
                 # sub-agents (WinrichMFDataAgent, MFBenchmarkAgent, IndexAgent)
@@ -413,11 +414,13 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
                     backoff_s=cfg.retry_backoff_s,
                     label=f"PDF:{name}",
                 )
+                if res.status.name == "SKIPPED":
+                    return name, None, None, res.metadata.get("reason", "outside portfolio value range")
                 if res.status.name == "FAILED":
-                    return name, None, res.error
-                return name, res.output["pdf_path"], None
+                    return name, None, res.error, None
+                return name, res.output["pdf_path"], None, None
             except Exception as e:
-                return name, None, str(e)
+                return name, None, str(e), None
 
         if fresh_customers:
             with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.pdf_workers) as pool:
@@ -425,8 +428,14 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
                 for fut in concurrent.futures.as_completed(futs):
                     if stop_evt.is_set():
                         break
-                    name, pdf_path, err = fut.result()
-                    if err:
+                    name, pdf_path, err, skip_reason = fut.result()
+                    if skip_reason:
+                        log(f"⊘ Skipped {name}: {skip_reason}", "warn")
+                        log_q.put({"type": "result", "bucket": "skipped",
+                                   "entry": {"customer_name": name, "error": skip_reason}})
+                        log_q.put({"type": "count", "key": "skipped", "delta": 1})
+                        cp.mark_skipped(name, skip_reason); cp.save()
+                    elif err:
                         log(f"✗ PDF {name}: {err}", "err")
                         log_q.put({"type": "result", "bucket": "failed",
                                    "entry": {"customer_name": name, "error": err}})
@@ -704,6 +713,12 @@ with st.sidebar:
     as_of_date        = st.date_input("As of date", value=None,             help="Report as-of date. Leave blank to use today.")
     as_of_date_str    = as_of_date.strftime("%Y-%m-%d") if as_of_date else ""
 
+    # portfolio_min_value / portfolio_max_value are derived from the
+    # "Portfolio value range" slider in the Customer Selection section below.
+    # Initialised here so they are always defined; overwritten once the slider renders.
+    portfolio_min_value = 0.0
+    portfolio_max_value = 0.0
+
 
     # ── Customer Selection ────────────────────────────────────────────────────
     st.markdown('<div class="section-label" style="margin-top:18px">Customer Selection</div>', unsafe_allow_html=True)
@@ -748,6 +763,8 @@ with st.sidebar:
         pf_min_cr = pf_max_cr = 0.0
         enable_portfolio_filter = False
         pf_filtered_customers = []
+        portfolio_min_value = 0.0
+        portfolio_max_value = 0.0
     else:
         # Step 2: Load portfolio summary and apply value filter
         summary_values = _load_portfolio_summary_data()
@@ -784,6 +801,10 @@ with st.sidebar:
                 step=0.5,
                 help="Filter to customers whose stored total_value is in this range.",
             )
+
+        # 0 = sentinel for "no bound" passed into the report agent
+        portfolio_min_value = pf_min_cr * 1e7                                          # 0.0 → no minimum
+        portfolio_max_value = pf_max_cr * 1e7 if pf_max_cr < _slider_max else 0.0     # 0.0 → no maximum
 
         min_raw = _from_cr(pf_min_cr)
         max_raw = _from_cr(pf_max_cr)
@@ -884,9 +905,9 @@ campaign_params = {
     "logo_path":              logo_path,
     "risk_profile":           risk_profile,
     "as_of_date":             as_of_date_str,
-    # Portfolio filter metadata (informational — filtering already applied via selected_customers)
-    "portfolio_filter_min_cr": pf_min_cr if enable_portfolio_filter else None,
-    "portfolio_filter_max_cr": pf_max_cr if enable_portfolio_filter else None,
+    # Value range from "Portfolio value range" slider — customers outside are skipped during generation
+    "portfolio_min_value": portfolio_min_value,
+    "portfolio_max_value": portfolio_max_value,
 }
 
 

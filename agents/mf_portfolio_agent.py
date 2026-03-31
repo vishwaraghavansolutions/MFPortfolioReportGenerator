@@ -78,16 +78,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logging.root.setLevel(logging.DEBUG)
 
-# Always write full untruncated debug output to a log file regardless of
-# whether Streamlit has already configured the root logger.
+_log_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+# Console: INFO and above only (reduces terminal noise during campaign runs)
+_sh = logging.StreamHandler()
+_sh.setLevel(logging.INFO)
+_sh.setFormatter(_log_fmt)
+
+# File: full DEBUG detail for troubleshooting
 _log_file = "mf_portfolio_agent.log"
 _fh = logging.FileHandler(_log_file, mode="w", encoding="utf-8")
 _fh.setLevel(logging.DEBUG)
-_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
-logging.root.addHandler(_fh)
+_fh.setFormatter(_log_fmt)
+
+logging.root.setLevel(logging.DEBUG)
+if not logging.root.handlers:
+    logging.root.addHandler(_sh)
+    logging.root.addHandler(_fh)
+else:
+    # Streamlit already added handlers — just ensure file handler is present
+    # and tighten existing stream handlers to INFO
+    for _h in logging.root.handlers:
+        if isinstance(_h, logging.StreamHandler) and not isinstance(_h, logging.FileHandler):
+            _h.setLevel(logging.INFO)
+    if not any(isinstance(_h, logging.FileHandler) for _h in logging.root.handlers):
+        logging.root.addHandler(_fh)
 
 _DEFAULT_BUCKET = "winrich"
 
@@ -1307,8 +1323,7 @@ class MFPortfolioAgent(Agent):
         company_name      = params.get("company_name", "WinRich Professional Services")
         output_dir        = params.get("output_dir", ".")
 
-        logger.info("Inside generate_pdf_report") 
-        logger.info(customer_df)
+        logger.debug("Inside generate_pdf_report for %s (%d rows)", selected_customer, len(customer_df))
         missing = [k for k, v in {"customer_df": customer_df, "metrics": metrics}.items()
                    if v is None]
         if missing:
@@ -1495,8 +1510,9 @@ class MFPortfolioAgent(Agent):
             "commentary":          commentary or None,
         }
 
-        filename    = (f"{datetime.now().strftime('%Y%m%d')}__{selected_customer.replace(' ', '')}"
-                       "_portfolio_report.pdf")
+        import re as _re
+        _safe_name  = _re.sub(r'[\\/:*?"<>|]', '', selected_customer).replace(' ', '')
+        filename    = f"{datetime.now().strftime('%Y%m%d')}__{_safe_name}_portfolio_report.pdf"
         output_dir  = os.path.normpath(os.path.abspath(output_dir or "."))
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, filename)
@@ -1567,6 +1583,31 @@ class MFPortfolioAgent(Agent):
         customer_df       = r1.output["customer_df"]
         selected_customer = r1.output["selected_customer"]
         resolved_path     = r1.output.get("resolved_path", "")
+
+        # ── Portfolio value filter (applied before expensive steps) ───────────
+        # 0 = no bound. Filter only activates when min > 0 or max > 0.
+        min_pv = float(params.get("portfolio_min_value") or 0)
+        max_pv = float(params.get("portfolio_max_value") or 0)
+        if (min_pv > 0 or max_pv > 0) and "CurValue" in customer_df.columns:
+            total_cur = float(customer_df["CurValue"].fillna(0).sum())
+            if min_pv > 0 and total_cur < min_pv:
+                return AgentResponse(
+                    AgentStatus.SKIPPED,
+                    metadata={
+                        "reason": (f"Current value ₹{total_cur:,.0f} is below "
+                                   f"minimum ₹{min_pv:,.0f}"),
+                        "total_current_value": total_cur,
+                    },
+                )
+            if max_pv > 0 and total_cur > max_pv:
+                return AgentResponse(
+                    AgentStatus.SKIPPED,
+                    metadata={
+                        "reason": (f"Current value ₹{total_cur:,.0f} exceeds "
+                                   f"maximum ₹{max_pv:,.0f}"),
+                        "total_current_value": total_cur,
+                    },
+                )
 
         # ── Step 2: benchmark enrichment ──────────────────────────────────────
         r2 = self.run("enrich_benchmarks", {**base, "customer_df": customer_df})
@@ -1743,7 +1784,7 @@ class MFPortfolioAgent(Agent):
                 _r5b.error,
             )
         else:
-            logger.info(
+            logger.debug(
                 "[generate_quarterly_report] Portfolio summary stored: %s (%d rows)",
                 _r5b.output.get("gcs_uri"),
                 _r5b.output.get("row_count", 0),

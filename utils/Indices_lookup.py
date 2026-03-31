@@ -20,6 +20,7 @@ Usage
 """
 
 import json
+import logging
 import re
 import glob
 from pathlib import Path
@@ -27,6 +28,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ── Default file locations ─────────────────────────────────────────────────────
@@ -107,7 +110,7 @@ class SchemeLookup:
 
     @staticmethod
     def _load_scheme(path: Path) -> pd.DataFrame:
-        print(f"[INFO] Loading scheme data from: {path}")
+        logger.debug("Loading scheme data from: %s", path)
         if not path.exists():
             raise FileNotFoundError(f"Scheme CSV not found: {path}")
         df = pd.read_csv(path)

@@ -12,7 +12,7 @@ no credential plumbing needed here.
 Skills
 ------
   list_customers          – return sorted list of all unique c_name values
-  load_customer_portfolio – filter + enrich one customer's holdings
+  load_customer_portfolio – filter one customer's holdings from the datawarehouse
   get_resolved_path       – return the GCS URI that would be loaded (no download)
 
 All skills accept these optional GCS params
@@ -30,15 +30,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict
 
 import pandas as pd
 
 from agents.base import Agent, AgentResponse, AgentStatus
 from utils.datawarehouse_loader import load_datawarehouse_csv, get_datawarehouse_path
-from utils.Indices_lookup import SchemeLookup
-from utils.customer_portfolio import get_customer_portfolio
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +47,6 @@ class WinrichMFDataAgent(Agent):
     Single-responsibility agent: owns the MutualFunds datawarehouse CSV on GCS.
 
     Authentication is handled entirely by GCPCSVReader (st.secrets["gcp"]).
-    SchemeLookup is cached at the instance level — parsed once per agent lifetime.
 
     Usage
     -----
@@ -67,15 +63,8 @@ class WinrichMFDataAgent(Agent):
 
     name = "WinrichMFDataAgent"
 
-    def __init__(
-        self,
-        scheme_csv:   Optional[Path] = None,
-        mapping_json: Optional[Path] = None,
-    ):
-        self._lookup_kwargs: Dict[str, Any] = {}
-        if scheme_csv:   self._lookup_kwargs["scheme_csv"]   = scheme_csv
-        if mapping_json: self._lookup_kwargs["mapping_json"] = mapping_json
-        self._lookup: Optional[SchemeLookup] = None  # lazy init
+    def __init__(self):
+        pass
 
     # ── Skill map ──────────────────────────────────────────────────────────────
     @property
@@ -89,17 +78,18 @@ class WinrichMFDataAgent(Agent):
     def get_skills(self) -> Dict[str, Callable]:
         return self.skills
 
-    # ── Internal helpers ───────────────────────────────────────────────────────
-    def _get_lookup(self) -> SchemeLookup:
-        if self._lookup is None:
-            self._lookup = SchemeLookup(**self._lookup_kwargs)
-        return self._lookup
-
     @staticmethod
     def _gcs_params(params: Dict[str, Any]) -> tuple:
+        raw = params.get("as_of_date")
+        if not raw:
+            as_of_date = datetime.now()
+        elif isinstance(raw, str):
+            as_of_date = datetime.strptime(raw[:10], "%Y-%m-%d")
+        else:
+            as_of_date = raw
         return (
             params.get("bucket_name",       _DEFAULT_BUCKET),
-            params.get("as_of_date",        datetime.now()),
+            as_of_date,
             params.get("max_lookback_days", 10),
         )
 
@@ -198,23 +188,14 @@ class WinrichMFDataAgent(Agent):
                 metadata={"available_count": len(all_customers)},
             )
 
-        try:
-            customer_df = get_customer_portfolio(
-                df, customer_name, lookup=self._get_lookup()
-            )
-        except Exception as exc:
-            return AgentResponse(
-                AgentStatus.FAILED,
-                error=f"Portfolio enrichment failed: {exc}",
-                metadata={"customer": customer_name},
-            )
+        customer_df = df[df["c_name"] == customer_name].copy()
 
         try:
             resolved = get_datawarehouse_path(as_of, bucket, lookback)
         except Exception:
             resolved = f"gs://{bucket}/Datawarehouse/MutualFunds/…/mutualfunds.csv"
 
-        log.info(
+        log.debug(
             "WinrichMFDataAgent: loaded %d rows for '%s' from %s",
             len(customer_df), customer_name, resolved,
         )

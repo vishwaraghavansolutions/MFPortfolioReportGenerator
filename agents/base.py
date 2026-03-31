@@ -7,6 +7,7 @@ class AgentStatus(Enum):
     SUCCESS = "success"
     FAILED  = "failed"
     RETRY   = "retry"
+    SKIPPED = "skipped"
 
 
 class AgentResponse:
