@@ -78,8 +78,10 @@ def load_datawarehouse_csv(
     """
     from utils.gcs_csv_reader import GCPCSVReader
 
-    if as_of_date is None:
+    if not as_of_date:
         as_of_date = datetime.now()
+    elif isinstance(as_of_date, str):
+        as_of_date = datetime.strptime(as_of_date[:10], "%Y-%m-%d")
 
     reader = GCPCSVReader(bucket_name=bucket_name)
 
@@ -91,7 +93,7 @@ def load_datawarehouse_csv(
 
         if not df.empty:
             df.columns = df.columns.str.strip()
-            log.info("GCS: loaded %d rows from gs://%s/%s", len(df), bucket_name, blob_path)
+            log.debug("GCS: loaded %d rows from gs://%s/%s", len(df), bucket_name, blob_path)
             return df
 
         log.debug("GCS: not found — %s", blob_path)
@@ -123,8 +125,10 @@ def get_datawarehouse_path(
     """
     from utils.gcs_csv_reader import GCPCSVReader
 
-    if as_of_date is None:
+    if not as_of_date:
         as_of_date = datetime.now()
+    elif isinstance(as_of_date, str):
+        as_of_date = datetime.strptime(as_of_date[:10], "%Y-%m-%d")
 
     reader = GCPCSVReader(bucket_name=bucket_name)
 

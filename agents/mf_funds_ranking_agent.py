@@ -42,10 +42,6 @@ from agents.gcs_storage_agent import GCSStorageAgent
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-# basicConfig is a no-op if the root logger already has handlers (e.g. set up by another
-# module or by Streamlit).  Force the root level down so our DEBUG records are not dropped.
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logging.root.setLevel(logging.DEBUG)
 
 # ── GCS settings ───────────────────────────────────────────────────────────────
 # FundRankingAgent delegates all GCS I/O to GCSStorageAgent (load_ranking_csv).
@@ -109,7 +105,7 @@ def _load_from_gcs(
         {k: (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
         for row in rows
     ]
-    logger.info(
+    logger.debug(
         "FundRankingAgent: loaded %d rows from GCS %s",
         len(rows), resp.output["gcs_uri"],
     )
@@ -121,7 +117,7 @@ def _load_from_local(filename: str = LOCAL_FILE) -> tuple[List[Dict], str]:
     with open(filename, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         rows   = [row for row in reader]
-    logger.info(
+    logger.debug(
         "FundRankingAgent: loaded %d rows from local file '%s'", len(rows), filename
     )
     return rows, "local"
@@ -391,7 +387,7 @@ class FundRankingAgent(Agent):
         scheme_type     = str(params.get("scheme_type",     "") or "").strip()
         scheme_category = str(params.get("scheme_category", "") or "").strip()
 
-        logger.info(
+        logger.debug(
             "FundRankingAgent.get_fund_rank called with fund_name='%s', scheme_type='%s', scheme_category='%s'",
             fund_name, scheme_type, scheme_category,
         )
@@ -402,7 +398,7 @@ class FundRankingAgent(Agent):
                 "scheme_category": scheme_category,
             }.items() if not v
         ]
-        logger.info("FundRankingAgent.get_fund_rank missing params: %s", missing)
+        logger.debug("FundRankingAgent.get_fund_rank missing params: %s", missing)
 
         if missing:
             return AgentResponse(
@@ -414,9 +410,9 @@ class FundRankingAgent(Agent):
         filename    = params.get("ranking_filename", _DEFAULT_RANKING_FILENAME)
         bucket_name = params.get("ranking_bucket",   _DEFAULT_RANKING_BUCKET)
         prefix      = params.get("ranking_prefix",   _DEFAULT_RANKING_PREFIX)
-        logger.info(
+        logger.debug(
             "FundRankingAgent.get_fund_rank loading data with filename='%s', bucket_name='%s', prefix='%s'",
-            filename, bucket_name, prefix,  
+            filename, bucket_name, prefix,
         )
         try:
             cache_key = (filename, bucket_name, prefix)

@@ -598,8 +598,7 @@ def generate_ai_commentary(portfolio_data):
 
     prompt = _build_commentary_prompt(portfolio_data)
 
-    # ── Log fund values so we can verify signs before sending to Claude ────────
-    logger.info("[commentary] === Fund values passed to AI ===")
+    logger.debug("[commentary] === Fund values passed to AI ===")
     for f in (portfolio_data.get("all_funds") or []):
         xirr  = f.get("xirr")
         b1yr  = f.get("benchmark_return_1yr")
@@ -607,7 +606,7 @@ def generate_ai_commentary(portfolio_data):
         b5yr  = f.get("benchmark_return_5yr")
         rank  = f.get("winrich_rank", "N/A")
         bench = f.get("benchmark_index", "N/A")
-        logger.info(
+        logger.debug(
             "[commentary]   %-60s  XIRR=%s  BenchIdx=%s  1Y=%s  3Y=%s  5Y=%s  Rank=%s",
             f.get("name", "?"),
             f"{xirr:.2f}%" if xirr is not None else "None",
@@ -617,8 +616,7 @@ def generate_ai_commentary(portfolio_data):
             f"{b5yr:.2f}%" if b5yr is not None else "None",
             rank,
         )
-    logger.info("[commentary] === Full prompt sent to Claude ===\n%s", prompt)
-    # ──────────────────────────────────────────────────────────────────────────
+    logger.debug("[commentary] === Full prompt sent to Claude ===\n%s", prompt)
 
     client  = anthropic.Anthropic()
     message = client.messages.create(
@@ -626,7 +624,7 @@ def generate_ai_commentary(portfolio_data):
         messages=[{"role":"user","content":prompt}],
     )
     raw    = message.content[0].text
-    logger.info("[commentary] === Claude raw response ===\n%s", raw)
+    logger.debug("[commentary] === Claude raw response ===\n%s", raw)
     blocks = _parse_commentary(raw)
     return blocks or [{'heading':'Performance Commentary','body':raw.strip()}]
 

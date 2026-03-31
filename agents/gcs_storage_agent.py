@@ -48,7 +48,7 @@ from agents.base import Agent, AgentResponse, AgentStatus
 import streamlit as st
 import logging
 
-logging.basicConfig(level=logging.INFO, format="%(threadName)s: %(message)s")
+logging.basicConfig(level=logging.WARNING, format="%(threadName)s: %(message)s")
 
 
 # ── Default GCS coordinates ────────────────────────────────────────────────────
@@ -203,7 +203,7 @@ class GCSStorageAgent(Agent):
         public_url    : str   – https://storage.googleapis.com/... (not signed)
         size_bytes    : int   – bytes uploaded
         """
-        logging.info(f"Received upload_report request with params: {params}")
+        logging.debug(f"Received upload_report request with params: {params}")
         pdf_path      = params.get("pdf_path", "").strip()
         customer_name = params.get("customer_name", "").strip()
 
@@ -238,7 +238,7 @@ class GCSStorageAgent(Agent):
             blob   = bucket.blob(blob_name)
             blob.metadata = gcs_metadata
 
-            logging.info(f"Uploading {pdf_path} to gs://{bucket_name}/{blob_name}...")
+            logging.debug(f"Uploading {pdf_path} to gs://{bucket_name}/{blob_name}...")
             blob.upload_from_filename(pdf_path, content_type=content_type)
 
             size_bytes = os.path.getsize(pdf_path)
@@ -537,7 +537,7 @@ class GCSStorageAgent(Agent):
             bucket = client.bucket(bucket_name)
             blob   = bucket.blob(blob_name)
 
-            logging.info(f"Loading ranking CSV from {gcs_uri}")
+            logging.debug(f"Loading ranking CSV from {gcs_uri}")
             raw_bytes = blob.download_as_bytes()
             df        = pd.read_csv(io.BytesIO(raw_bytes))
 
@@ -682,7 +682,7 @@ class GCSStorageAgent(Agent):
             # ── Load existing data (if any) ────────────────────────────────
             existing_df: pd.DataFrame
             if blob.exists():
-                logging.info(f"Downloading existing portfolio summary from {gcs_uri}")
+                logging.debug(f"Downloading existing portfolio summary from {gcs_uri}")
                 raw = blob.download_as_bytes()
                 existing_df = pd.read_parquet(io.BytesIO(raw))
                 # Drop the old row for this customer so we can upsert
@@ -701,7 +701,7 @@ class GCSStorageAgent(Agent):
             merged_df.to_parquet(buf, index=False, engine="pyarrow")
             buf.seek(0)
 
-            logging.info(f"Uploading portfolio summary ({len(merged_df)} rows) to {gcs_uri}")
+            logging.debug(f"Uploading portfolio summary ({len(merged_df)} rows) to {gcs_uri}")
             blob.upload_from_file(buf, content_type="application/octet-stream")
 
         except Exception as exc:
@@ -774,7 +774,7 @@ class GCSStorageAgent(Agent):
                               "note": "file does not exist yet"},
                 )
 
-            logging.info(f"Loading portfolio summary from {gcs_uri}")
+            logging.debug(f"Loading portfolio summary from {gcs_uri}")
             raw = blob.download_as_bytes()
             df  = pd.read_parquet(io.BytesIO(raw))
 
@@ -851,7 +851,7 @@ class GCSStorageAgent(Agent):
             blob.metadata = {"uploaded_at": datetime.now(timezone.utc).isoformat(),
                              "source_path": file_path}
 
-            logging.info(f"Uploading {file_path} to {gcs_uri}...")
+            logging.debug(f"Uploading {file_path} to {gcs_uri}...")
             blob.upload_from_filename(file_path, content_type="text/csv")
 
             size_bytes = os.path.getsize(file_path)
