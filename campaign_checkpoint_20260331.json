@@ -45,7 +45,9 @@
     "Abhilekh Verma": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260331__AbhilekhVerma_portfolio_report.pdf",
     "A Balamurugan": "C:\\MyWorkSpace\\Ourlife\\Apps\\Python\\MFPortfolioReportGenerator\\reports\\20260331__ABalamurugan_portfolio_report.pdf"
   },
-  "gcs_done": {},
+  "gcs_done": {
+    "Venkata Raghav Parthasarathy": "gs://winrich_customer_reports/Quarterly/mf_portfolio_reports/venkata_raghav_parthasarathy/20260331__VenkataRaghavParthasarathy_portfolio_report.pdf"
+  },
   "failed": {
     "Awdhi Sudhir": "[generate_pdf_report] name 'customer_name' is not defined",
     "Atoshi Chakraborty": "[generate_pdf_report] name 'customer_name' is not defined",
@@ -904,5 +906,5 @@
     "Veena Rajappa": "skip_email=True"
   },
   "started_at": "2026-03-31T14:33:10.189137+00:00",
-  "updated_at": "2026-03-31T15:39:34.634283+00:00"
+  "updated_at": "2026-03-31T16:00:31.327809+00:00"
 }
