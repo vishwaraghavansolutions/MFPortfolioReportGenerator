@@ -55,6 +55,26 @@ def _gcs_path(date: datetime) -> str:
     return f"Datawarehouse/MutualFunds/{date.year:04d}/{date.month:02d}/{date.day:02d}/mutualfunds.csv"
 
 
+# ── Nature field corrections ──────────────────────────────────────────────────
+# Maps a substring of s_name (case-insensitive) to the correct Nature value.
+# Add entries here whenever a fund is misclassified in the source CSV.
+_NATURE_PATCHES: list[tuple[str, str]] = [
+    ("ICICI Prudential US Bluechip Equity Fund", "Equity"),
+]
+
+
+def _apply_nature_patches(df: pd.DataFrame) -> pd.DataFrame:
+    """Correct known Nature misclassifications in the datawarehouse CSV."""
+    if "s_name" not in df.columns or "Nature" not in df.columns:
+        return df
+    for fragment, correct_nature in _NATURE_PATCHES:
+        mask = df["s_name"].str.contains(fragment, case=False, na=False)
+        if mask.any():
+            log.debug("Nature patch: %d row(s) matching %r → %r", mask.sum(), fragment, correct_nature)
+            df.loc[mask, "Nature"] = correct_nature
+    return df
+
+
 # ── Public functions ──────────────────────────────────────────────────────────
 
 def load_datawarehouse_csv(
@@ -93,6 +113,7 @@ def load_datawarehouse_csv(
 
         if not df.empty:
             df.columns = df.columns.str.strip()
+            df = _apply_nature_patches(df)
             log.debug("GCS: loaded %d rows from gs://%s/%s", len(df), bucket_name, blob_path)
             return df
 

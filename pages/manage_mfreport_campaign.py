@@ -463,6 +463,15 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         for name in resume_email:
             phase2_results[name] = cp.gcs_done.get(name, "")
 
+        # Build GCS prefix from as_of_date: Quarterly/Mutual Fund Portfolio Reports/{Year}/Q{N}
+        _aod_raw = params.get("as_of_date")
+        try:
+            _aod = datetime.strptime(_aod_raw[:10], "%Y-%m-%d") if _aod_raw else datetime.now()
+        except Exception:
+            _aod = datetime.now()
+        _quarter  = (_aod.month - 1) // 3 + 1
+        _gcs_prefix = f"Quarterly/Mutual Fund Portfolio Reports/{_aod.year}/Q{_quarter}"
+
         gcs_candidates = [n for n in phase1_results if not cp.has_gcs(n) and not cp.is_done(n)]
 
         def _upload_gcs(name):
@@ -478,8 +487,9 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
                         "pdf_path": pdf_path,
                         "customer_name": name,
                         "filename": os.path.basename(pdf_path),
-                        "bucket_name": params.get("gcs_bucket", "winrich_customer_reports"),
-                        "prefix": params.get("gcs_prefix", "Quarterly/mf_portfolio_reports"),
+                        "bucket_name": "winrich_customer_reports",
+                        "prefix": _gcs_prefix,
+                        "flat": True,
                     }),
                     max_retries=cfg.max_retries,
                     backoff_s=cfg.retry_backoff_s,

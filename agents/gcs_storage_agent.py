@@ -126,21 +126,18 @@ def _build_blob_name(
     customer_name: str,
     filename: str,
     prefix: str,
+    flat: bool = False,
 ) -> str:
     """
     Build the full GCS object key.
 
-    Pattern:
-      <prefix>/<customer_folder>/<filename>
-
-    customer_folder is the customer name with spaces replaced by underscores
-    and lowercased so it is URL-safe and consistent across runs.
-
-    Example:
-      quarterly/mf_portfolio_reports/ramesh_kumar/portfolio_report_Ramesh_Kumar_20260302.pdf
+    flat=False (default):  <prefix>/<customer_folder>/<filename>
+    flat=True:             <prefix>/<filename>
     """
-    customer_folder = customer_name.strip().lower().replace(" ", "_")
     clean_prefix = prefix.rstrip("/")
+    if flat:
+        return f"{clean_prefix}/{filename}"
+    customer_folder = customer_name.strip().lower().replace(" ", "_")
     return f"{clean_prefix}/{customer_folder}/{filename}"
 
 
@@ -222,8 +219,9 @@ class GCSStorageAgent(Agent):
         filename     = params.get("filename",     os.path.basename(pdf_path))
         content_type = params.get("content_type", "application/pdf")
         extra_meta   = params.get("metadata",     {})
+        flat         = bool(params.get("flat",    False))
 
-        blob_name = _build_blob_name(customer_name, filename, prefix)
+        blob_name = _build_blob_name(customer_name, filename, prefix, flat=flat)
 
         gcs_metadata = {
             "customer_name": customer_name,
