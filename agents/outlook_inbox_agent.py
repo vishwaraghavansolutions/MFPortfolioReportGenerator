@@ -58,36 +58,20 @@ def _check_deps() -> None:
         )
 
 
-def _get_config(override: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def _get_config(credentials: Dict[str, str]) -> Dict[str, str]:
     """
-    Resolve MS Graph credentials.
+    Validate and return MS Graph credentials supplied by the caller.
 
-    Priority:
-      1. override dict passed in from the caller (e.g. from st.secrets via campaign)
-      2. Environment variables (loaded from .env via python-dotenv if present)
+    Expected keys: client_id, client_secret, tenant_id, mailbox
     """
-    # Load .env into os.environ if python-dotenv is available
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(override=False)   # won't overwrite already-set vars
-    except ImportError:
-        pass
-
-    ov = override or {}
-
-    def _get(key: str, env_key: str) -> str:
-        return ov.get(key) or os.environ.get(env_key, "")
-
-    cfg = {
-        "client_id":     _get("client_id",     "MS_CLIENT_ID"),
-        "client_secret": _get("client_secret", "MS_CLIENT_SECRET"),
-        "tenant_id":     _get("tenant_id",     "MS_TENANT_ID"),
-        "mailbox":       _get("mailbox",        "MS_GRAPH_MAILBOX"),
-    }
-    missing = [k for k, v in cfg.items() if not v]
+    required = ["client_id", "client_secret", "tenant_id", "mailbox"]
+    missing  = [k for k in required if not credentials.get(k)]
     if missing:
-        raise ValueError("Missing environment variable(s): " + ", ".join(missing))
-    return cfg
+        raise ValueError(
+            "MS Graph credentials not provided: " + ", ".join(missing) +
+            ". Pass them via the 'ms_credentials' param."
+        )
+    return {k: credentials[k] for k in required}
 
 
 def _acquire_token(cfg: Dict[str, str]) -> str:
@@ -571,7 +555,7 @@ class OutlookInboxAgent(Agent):
             }]
 
         try:
-            cfg     = _get_config(override=params.get("ms_credentials"))
+            cfg     = _get_config(params.get("ms_credentials") or {})
             mailbox = params.get("mailbox") or cfg["mailbox"]
             token   = _acquire_token(cfg)
             url     = f"{_GRAPH_BASE}/users/{mailbox}/sendMail"
