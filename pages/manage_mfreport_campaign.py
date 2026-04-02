@@ -534,6 +534,22 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         company_name   = params.get("company_name", "Winrich Professional Services")
         csv_path       = params.get("csv_path", "data/Datawarehouse_MutualFunds_2026_01_01_mutualfunds.csv")
 
+        # MS Graph credentials — read from st.secrets, passed explicitly so the
+        # agent doesn't need to call st.secrets itself (works in background threads)
+        try:
+            import streamlit as st
+            _ms = st.secrets.get("microsoft", {})
+            ms_credentials = {
+                "client_id":     _ms.get("client_id",     ""),
+                "client_secret": _ms.get("client_secret", ""),
+                "tenant_id":     _ms.get("tenant_id",     ""),
+                "mailbox":       _ms.get("mailbox",        ""),
+            }
+            # Drop empty values so agent falls back to .env for missing keys
+            ms_credentials = {k: v for k, v in ms_credentials.items() if v}
+        except Exception:
+            ms_credentials = {}
+
         email_candidates = list({
             n for n in list(phase1_results.keys()) + resume_email
             if not cp.is_done(n)
@@ -560,12 +576,13 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
             try:
                 res = with_retry(
                     lambda: outlook_agent.run("send_email", {
-                        "to_email":      to_email,
-                        "client_name":   name,
-                        "subject":       f"Your {report_period} Portfolio Report — {company_name}",
-                        "pdf_path":      phase1_results.get(name, cp.pdf_done.get(name, "")),
-                        "company_name":  company_name,
-                        "report_period": report_period,
+                        "to_email":       to_email,
+                        "client_name":    name,
+                        "subject":        f"Your {report_period} Portfolio Report — {company_name}",
+                        "pdf_path":       phase1_results.get(name, cp.pdf_done.get(name, "")),
+                        "company_name":   company_name,
+                        "report_period":  report_period,
+                        "ms_credentials": ms_credentials,
                     }),
                     max_retries=cfg.max_retries,
                     backoff_s=cfg.retry_backoff_s,

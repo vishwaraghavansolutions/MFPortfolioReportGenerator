@@ -10,3 +10,4 @@ sendgrid
 playwright
 requests
 msal
+python-dotenv
