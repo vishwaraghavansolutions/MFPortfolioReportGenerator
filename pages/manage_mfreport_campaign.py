@@ -274,6 +274,20 @@ def _read_checkpoint(path: str) -> Optional[Dict]:
         return None
 
 
+def _load_ms_credentials() -> dict:
+    """Load MS Graph credentials from st.secrets['microsoft']."""
+    try:
+        ms = st.secrets["microsoft"]
+        return {
+            "client_id":     ms.get("client_id",     ""),
+            "client_secret": ms.get("client_secret", ""),
+            "tenant_id":     ms.get("tenant_id",     ""),
+            "mailbox":       ms.get("mailbox",        ""),
+        }
+    except Exception:
+        return {"client_id": "", "client_secret": "", "tenant_id": "", "mailbox": ""}
+
+
 def _default_checkpoint_path() -> str:
     return f"campaign_checkpoint_{datetime.now().strftime('%Y%m%d')}.json"
 
@@ -718,6 +732,16 @@ with st.sidebar:
     skip_email      = st.checkbox("Dry-run (no emails)",         value=False)
     fresh_start     = st.checkbox("Fresh start (ignore checkpoint)", value=False)
 
+    # ── MS Graph credential debug ─────────────────────────────────────────────
+    _ms_creds = _load_ms_credentials()
+    with st.expander("MS Graph credentials (from st.secrets)", expanded=False):
+        st.write({
+            "client_id":     _ms_creds["client_id"][:8]     + "…" if _ms_creds["client_id"]     else "❌ missing",
+            "client_secret": _ms_creds["client_secret"][:4] + "…" if _ms_creds["client_secret"] else "❌ missing",
+            "tenant_id":     _ms_creds["tenant_id"][:8]     + "…" if _ms_creds["tenant_id"]     else "❌ missing",
+            "mailbox":       _ms_creds["mailbox"]                  if _ms_creds["mailbox"]       else "❌ missing",
+        })
+
     st.markdown('<div class="section-label" style="margin-top:18px">Report Settings</div>', unsafe_allow_html=True)
     parquet_dir       = st.text_input("Parquet data dir",   value="data",   help="Directory containing Index_Dashboard_*.parquet and SchemeData CSV files")
     bucket_name       = st.text_input("GCS bucket (data)",  value="winrich", help="GCS bucket for QoQ portfolio parquet files (WinrichMFDataAgent)")
@@ -922,13 +946,8 @@ campaign_params = {
     # Value range from "Portfolio value range" slider — customers outside are skipped during generation
     "portfolio_min_value": portfolio_min_value,
     "portfolio_max_value": portfolio_max_value,
-    # MS Graph credentials read here on the main thread (st.secrets not accessible in threads)
-    "ms_credentials": {k: v for k, v in {
-        "client_id":     st.secrets.get("microsoft", {}).get("client_id",     ""),
-        "client_secret": st.secrets.get("microsoft", {}).get("client_secret", ""),
-        "tenant_id":     st.secrets.get("microsoft", {}).get("tenant_id",     ""),
-        "mailbox":       st.secrets.get("microsoft", {}).get("mailbox",        ""),
-    }.items() if v},
+    # MS Graph credentials — loaded from .env on the main thread and passed into the campaign thread
+    "ms_credentials": _load_ms_credentials(),
 }
 
 
