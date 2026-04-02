@@ -58,16 +58,25 @@ def _check_deps() -> None:
         )
 
 
-def _get_config() -> Dict[str, str]:
-    # Read from st.secrets["microsoft"] first, fall back to environment variables
-    try:
-        import streamlit as st
-        ms = st.secrets.get("microsoft", {})
-    except Exception:
-        ms = {}
+def _get_config(override: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """
+    Resolve MS Graph credentials.
 
-    def _get(secret_key: str, env_key: str) -> str:
-        return ms.get(secret_key) or os.environ.get(env_key, "")
+    Priority:
+      1. override dict passed in from the caller (e.g. from st.secrets via campaign)
+      2. Environment variables (loaded from .env via python-dotenv if present)
+    """
+    # Load .env into os.environ if python-dotenv is available
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=False)   # won't overwrite already-set vars
+    except ImportError:
+        pass
+
+    ov = override or {}
+
+    def _get(key: str, env_key: str) -> str:
+        return ov.get(key) or os.environ.get(env_key, "")
 
     cfg = {
         "client_id":     _get("client_id",     "MS_CLIENT_ID"),
@@ -75,13 +84,7 @@ def _get_config() -> Dict[str, str]:
         "tenant_id":     _get("tenant_id",     "MS_TENANT_ID"),
         "mailbox":       _get("mailbox",        "MS_GRAPH_MAILBOX"),
     }
-    _KEY_NAMES = {
-        "client_id":     "microsoft.client_id / MS_CLIENT_ID",
-        "client_secret": "microsoft.client_secret / MS_CLIENT_SECRET",
-        "tenant_id":     "microsoft.tenant_id / MS_TENANT_ID",
-        "mailbox":       "microsoft.mailbox / MS_GRAPH_MAILBOX",
-    }
-    missing = [_KEY_NAMES[k] for k, v in cfg.items() if not v]
+    missing = [k for k, v in cfg.items() if not v]
     if missing:
         raise ValueError("Missing environment variable(s): " + ", ".join(missing))
     return cfg
@@ -568,7 +571,7 @@ class OutlookInboxAgent(Agent):
             }]
 
         try:
-            cfg     = _get_config()
+            cfg     = _get_config(override=params.get("ms_credentials"))
             mailbox = params.get("mailbox") or cfg["mailbox"]
             token   = _acquire_token(cfg)
             url     = f"{_GRAPH_BASE}/users/{mailbox}/sendMail"
