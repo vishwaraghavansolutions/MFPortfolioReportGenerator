@@ -8,3 +8,5 @@ pdfplumber
 google-cloud-storage
 sendgrid
 playwright
+requests
+msal
