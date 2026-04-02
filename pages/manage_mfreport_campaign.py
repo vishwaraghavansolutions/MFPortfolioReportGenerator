@@ -470,7 +470,7 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         except Exception:
             _aod = datetime.now()
         _quarter  = (_aod.month - 1) // 3 + 1
-        _gcs_prefix = f"Quarterly/Mutual Fund Portfolio Reports/{_aod.year}/Q{_quarter}"
+        _gcs_prefix = f"Quarterly/mf_portfolio_reports/{_aod.year}/Q{_quarter}"
 
         gcs_candidates = [n for n in phase1_results if not cp.has_gcs(n) and not cp.is_done(n)]
 
