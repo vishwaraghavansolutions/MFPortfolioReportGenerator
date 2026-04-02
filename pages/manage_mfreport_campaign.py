@@ -534,21 +534,8 @@ def _run_campaign_thread(params: Dict, log_q: queue.Queue, stop_evt: threading.E
         company_name   = params.get("company_name", "Winrich Professional Services")
         csv_path       = params.get("csv_path", "data/Datawarehouse_MutualFunds_2026_01_01_mutualfunds.csv")
 
-        # MS Graph credentials — read from st.secrets, passed explicitly so the
-        # agent doesn't need to call st.secrets itself (works in background threads)
-        try:
-            import streamlit as st
-            _ms = st.secrets.get("microsoft", {})
-            ms_credentials = {
-                "client_id":     _ms.get("client_id",     ""),
-                "client_secret": _ms.get("client_secret", ""),
-                "tenant_id":     _ms.get("tenant_id",     ""),
-                "mailbox":       _ms.get("mailbox",        ""),
-            }
-            # Drop empty values so agent falls back to .env for missing keys
-            ms_credentials = {k: v for k, v in ms_credentials.items() if v}
-        except Exception:
-            ms_credentials = {}
+        # MS Graph credentials passed in via params (read on main thread before campaign start)
+        ms_credentials = params.get("ms_credentials", {})
 
         email_candidates = list({
             n for n in list(phase1_results.keys()) + resume_email
@@ -935,6 +922,13 @@ campaign_params = {
     # Value range from "Portfolio value range" slider — customers outside are skipped during generation
     "portfolio_min_value": portfolio_min_value,
     "portfolio_max_value": portfolio_max_value,
+    # MS Graph credentials read here on the main thread (st.secrets not accessible in threads)
+    "ms_credentials": {k: v for k, v in {
+        "client_id":     st.secrets.get("microsoft", {}).get("client_id",     ""),
+        "client_secret": st.secrets.get("microsoft", {}).get("client_secret", ""),
+        "tenant_id":     st.secrets.get("microsoft", {}).get("tenant_id",     ""),
+        "mailbox":       st.secrets.get("microsoft", {}).get("mailbox",        ""),
+    }.items() if v},
 }
 
 
