@@ -59,23 +59,31 @@ def _check_deps() -> None:
 
 
 def _get_config() -> Dict[str, str]:
+    # Read from st.secrets["microsoft"] first, fall back to environment variables
+    try:
+        import streamlit as st
+        ms = st.secrets.get("microsoft", {})
+    except Exception:
+        ms = {}
+
+    def _get(secret_key: str, env_key: str) -> str:
+        return ms.get(secret_key) or os.environ.get(env_key, "")
+
     cfg = {
-        "client_id":     os.environ.get("MS_CLIENT_ID",     ""),
-        "client_secret": os.environ.get("MS_CLIENT_SECRET", ""),
-        "tenant_id":     os.environ.get("MS_TENANT_ID",     ""),
-        "mailbox":       os.environ.get("MS_GRAPH_MAILBOX", ""),
+        "client_id":     _get("client_id",     "MS_CLIENT_ID"),
+        "client_secret": _get("client_secret", "MS_CLIENT_SECRET"),
+        "tenant_id":     _get("tenant_id",     "MS_TENANT_ID"),
+        "mailbox":       _get("mailbox",        "MS_GRAPH_MAILBOX"),
     }
-    _ENV_NAMES = {
-        "client_id":     "MS_CLIENT_ID",
-        "client_secret": "MS_CLIENT_SECRET",
-        "tenant_id":     "MS_TENANT_ID",
-        "mailbox":       "MS_GRAPH_MAILBOX",
+    _KEY_NAMES = {
+        "client_id":     "microsoft.client_id / MS_CLIENT_ID",
+        "client_secret": "microsoft.client_secret / MS_CLIENT_SECRET",
+        "tenant_id":     "microsoft.tenant_id / MS_TENANT_ID",
+        "mailbox":       "microsoft.mailbox / MS_GRAPH_MAILBOX",
     }
-    missing = [_ENV_NAMES[k] for k, v in cfg.items() if not v]
+    missing = [_KEY_NAMES[k] for k, v in cfg.items() if not v]
     if missing:
-        raise ValueError(
-            f"Missing environment variable(s): " + ", ".join(missing)
-        )
+        raise ValueError("Missing environment variable(s): " + ", ".join(missing))
     return cfg
 
 
